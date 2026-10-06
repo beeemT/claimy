@@ -1,0 +1,74 @@
+version: "2"
+
+run:
+  concurrency: 4
+  timeout: 5m
+  tests: true
+  build-tags:
+    - integration
+    - fixtures
+  modules-download-mode: readonly
+
+formatters:
+  enable:
+    - gofumpt
+
+linters:
+  default: none
+  enable:
+    - dogsled
+    - dupword
+    - errcheck
+    - gocognit
+    - goconst
+    - gocritic
+    - godox
+    - govet
+    - ineffassign
+    - lll
+    - misspell
+    - nestif
+    - nlreturn
+    - nolintlint
+    - revive
+    - staticcheck
+    - unused
+    - usetesting
+    - whitespace
+
+  exclusions:
+    rules:
+      - linters:
+          - dogsled
+          - goconst
+          - lll
+        path: _test\.go
+      - linters:
+          - revive
+        path: (.*[/\\]test[/\\].*|_test\.go)
+        text: flag-parameter
+
+  settings:
+    errcheck:
+      check-blank: true
+      check-type-assertions: false
+      disable-default-exclusions: false
+    gocognit:
+      min-complexity: 20
+    godox:
+      keywords:
+        - TODO
+        - BUG
+        - FIXME
+    lll:
+      line-length: 240
+    nestif:
+      min-complexity: 4
+    nolintlint:
+      allow-unused: false
+      require-explanation: true
+      require-specific: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

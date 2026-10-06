@@ -1,0 +1,21 @@
+app:
+  env: dev
+  project: claimy
+  family: claimy
+  name: claimy
+
+dx:
+  use_random_port: false
+
+tracing:
+  provider: noop
+
+sampling:
+  enabled: false
+
+metric:
+  enabled: false
+
+httpserver:
+  default:
+    port: "8088"

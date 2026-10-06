@@ -1,0 +1,4 @@
+title = "Claimy Gitleaks configuration"
+
+[extend]
+useDefault = true

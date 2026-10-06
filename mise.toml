@@ -1,0 +1,54 @@
+[tools]
+go = "1.27.0"
+gofumpt = "0.7.0"
+golangci-lint = "2.13.1"
+prek = "0.4.11"
+gitleaks = "8.30.1"
+
+[tasks.setup]
+description = "Download Go dependencies and install git hooks"
+run = "go mod download && prek install"
+
+[tasks.worktree-setup]
+description = "Set up a worktree with Go dependencies and git hooks"
+depends = ["setup"]
+
+[tasks.version-check]
+description = "Check that go.mod and mise.toml pin the same Go version"
+run = "sh scripts/check-go-version.sh"
+
+[tasks.fmt]
+description = "Format Go source with gofumpt"
+run = "gofumpt -w ."
+
+[tasks.fmt-check]
+description = "Fail when Go source is not gofumpt-formatted"
+run = "sh scripts/check-gofumpt.sh"
+
+[tasks.vet]
+description = "Run go vet across all packages"
+run = "go vet ./..."
+
+[tasks.lint]
+description = "Run the pinned golangci-lint configuration"
+run = "golangci-lint run"
+
+[tasks.test]
+description = "Run all Go tests"
+run = "go test ./..."
+
+[tasks.build]
+description = "Build the Claimy executable"
+run = "mkdir -p build/bin && go build -o build/bin/claimy ./cmd/claimy"
+
+[tasks.run]
+description = "Run Claimy using the safe root distribution configuration"
+run = "go run ./cmd/claimy"
+
+[tasks.secret-scan]
+description = "Scan available Git history and working files with redacted Gitleaks output"
+run = '''gitleaks git --redact --no-banner --log-opts="--all" && gitleaks dir --redact --no-banner .'''
+
+[tasks.check]
+description = "Run all local and CI checks"
+run = "mise run version-check && mise run fmt-check && mise run vet && mise run lint && mise run test && mise run secret-scan && mise run build"

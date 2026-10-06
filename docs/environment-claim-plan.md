@@ -49,10 +49,11 @@ Keep query history for 90 days. A query may ask for the current state, a histori
 ## Repository evidence
 
 The existing `LICENSE` is MIT and remains unchanged.
-The stack below is a future design baseline; Claimy is not implemented by this plan.
+The runnable HTTP service and repository tooling now exist.
+Claim-domain behavior in the rest of this plan is not implemented yet.
 
-For a future implementation, select this public Go dependency baseline: Go 1.27.0, Gosoline 0.65.3, `httpserver` 0.6.4, SQLH 0.8.0, SQLR 0.9.1, and SQLC 0.4.0.
-These are proposed pinned public dependency versions only; they are not dependencies already added to Claimy.
+The current module pins Go 1.27.0, Gosoline 0.65.3, and `httpserver` 0.6.4.
+SQLH 0.8.0, SQLR 0.9.1, and SQLC 0.4.0 remain the selected public baseline for claim persistence.
 
 | ID | Pattern | Public source | Symbol |
 |---|---|---|---|
@@ -70,98 +71,91 @@ These are proposed pinned public dependency versions only; they are not dependen
 These release-pinned sources establish library capabilities only.
 Claimy owns its domain rules, group serialization, expiry and overlap decisions, HTTP error taxonomy, and whole-transaction retry policy.
 In particular, SQLC `Client.WithTx` does not retry whole transactions, and SQLR `ForUpdate` does not by itself establish Claimy's group-wide serialization invariant.
-None of these references establishes Claimy runtime behavior or an existing implementation.
+These references do not establish implementation of Claimy's domain rules.
 
 ## Repository setup and tooling
 
-This is a future repository blueprint, not a claim that these files, tasks, workflows, generators, or dependencies already exist.
-Make reproducible public repository setup the first implementation gate.
-An ordinary clone and a worktree must use the same public setup without private module replacements or worktree-specific dependencies.
+The repository now has reproducible public setup, a runnable health endpoint, container packaging, and a GitHub Actions workflow.
+An ordinary clone and a worktree use the same setup without private module replacements or worktree-specific dependencies.
+See `README.md` for current commands.
 
-Pin Go identically in `go.mod` and Mise (`go 1.27.0` and Mise `go = "1.27.0"`).
-Use these Mise tool names and versions; install Goose through the public Go backend at the same version for local development and CI:
+Go is pinned identically in `go.mod` and Mise (`1.27.0`).
+The active Mise tools are:
 
 ```toml
 [tools]
 go = "1.27.0"
 gofumpt = "0.7.0"
 golangci-lint = "2.13.1"
-mockery = "3.7.0"
-oapi-codegen = "2.4.1"
 prek = "0.4.11"
 gitleaks = "8.30.1"
-"go:github.com/pressly/goose/v3/cmd/goose" = "3.24.3"
 ```
 
 Use stock golangci-lint v2 with `linters.default: none`, `gofumpt` as the formatter, tests enabled, build tags `integration,fixtures`, readonly module downloads, concurrency 4, and a five-minute timeout.
 Enable these built-in linters explicitly: `dogsled`, `dupword`, `errcheck`, `gocognit`, `goconst`, `gocritic`, `godox`, `govet`, `ineffassign`, `lll`, `misspell`, `nestif`, `nlreturn`, `nolintlint`, `revive`, `staticcheck`, `unused`, `usetesting`, and `whitespace`.
 Exclude `dogsled`, `goconst`, and `lll` from test files, and exclude Revive's flag-parameter rule from test code. Keep other exceptions narrow and explicit.
 Do not require an unpublished or custom linter bundle.
-Use Mockery v3 only, generate testify mocks into per-package `mocks/` directories, and use static OpenAPI source with oapi-codegen-generated models rather than private templating modules.
-`go generate ./...` is authoritative; use Go `tool` directives in `go.mod` for Mockery and oapi-codegen, with their module versions matching Mise, and make CI fail on tracked or untracked generated-file drift.
+Add generator tools only with real interfaces or API contracts.
+Use Mockery v3.7.0/testify mocks in per-package `mocks/` directories and oapi-codegen v2.4.1 with static OpenAPI source.
+At that point, make `go generate ./...` authoritative, add matching Go `tool` directives, and fail CI on tracked or untracked generated-file drift.
+Do not add empty generator tasks or placeholder specifications.
 
-Use timestamped Goose `Up`/`Down` SQL migrations only under `build/migrations/claimy/`.
-`migrate-validate` runs Goose validation; migration up/down behavior is tested only against disposable MySQL.
-No default task applies or rolls back migrations on a shared database.
-Integration tests require Docker and use the public test harness's disposable `mysql:8.0.42` containers, deterministic fixtures, and a fixed test clock; do not add a second MySQL CI service unless the harness explicitly requires it.
+Add Goose v3.24.3 only with real timestamped `Up`/`Down` SQL migrations under `build/migrations/claimy/`.
+Then add `migrate-validate` and test migration up/down against disposable MySQL.
+No default task may apply or roll back migrations on a shared database.
+Future integration tests require Docker and the public test harness's disposable `mysql:8.0.42` containers, deterministic fixtures, and a fixed test clock.
+Do not add a second MySQL CI service unless the harness requires it.
 
-| Planned file or path | Future purpose |
+| File or path | Current status |
 |---|---|
-| `mise.toml` | Pinned tools and real developer tasks below |
-| `go.mod`, `go.sum` | Go 1.27.0 module, public dependencies, generator tool directives |
-| `.golangci.yml` | Stock v2 config, explicit built-in linter list, gofumpt, test tags, readonly modules |
-| `.mockery.yml`, `generate.go` | Mockery v3/testify generation and authoritative `go generate ./...` entry point |
-| OpenAPI source and generator config | Static public API contract and oapi-codegen model generation |
-| `build/migrations/claimy/` | Timestamped Goose `Up`/`Down` SQL migrations |
-| `prek.toml` | Contributor hooks using the same formatting, lint, and secret policies |
-| `.gitleaks.toml` | Gitleaks defaults with only narrow, reviewed exceptions |
-| `.gitignore` | Ignore local credentials/config, coverage, binaries, and local index artifacts |
-| `config.dist.yml`, `config.test.yml` | Committed examples with dummy values only |
-| `.github/workflows/ci.yml` | Public GitHub Actions checks and gated publishing to the personal Docker Hub account |
-| `Dockerfile`, `.dockerignore` | Public multi-stage application build, with local credentials, configuration, and Git metadata excluded |
-| `README.md`, `CONTRIBUTING.md` | Public contributor onboarding and repository conventions |
-| Existing `LICENSE` | Retain unchanged MIT license |
+| `cmd/claimy/main.go`, `config.dist.yml` | Runnable framework HTTP server with `/health`, port 8088, and no claim routes |
+| `mise.toml`, `scripts/` | Pinned tools and executable check tasks |
+| `go.mod`, `go.sum` | Public Go dependencies; no unused generator directives |
+| `.golangci.yml` | Stock v2 config and explicit built-in linters |
+| `prek.toml`, `.gitleaks.toml` | Formatting, lint, file checks, and secret scanning |
+| `.gitignore`, `.dockerignore` | Exclude local credentials, configuration, build output, and index artifacts |
+| `.github/workflows/ci.yml` | Public checks, container health smoke, and gated Docker Hub publishing |
+| `Dockerfile` | Public multi-stage build and nonroot static runtime |
+| `README.md` | Current contributor setup, runtime, and publishing instructions |
+| Existing `LICENSE` | Unchanged MIT license |
+| Mockery/OpenAPI generator inputs, `config.test.yml`, migrations, integration tests | Not created; add with their real behavior and inputs |
 
-Define these executable Mise tasks; the contributor and CI paths must use the same tasks:
+The following Mise tasks are implemented and shared by local development and CI:
 
-| Task | Future command or behavior |
+| Task | Current command or behavior |
 |---|---|
 | `setup` | `go mod download && prek install` |
-| `worktree-setup` | Depend on `setup`; ordinary clones run `setup` directly and require no local replacement directives |
+| `worktree-setup` | Depend on `setup` |
+| `version-check` | Compare Go versions in `go.mod` and `mise.toml` |
 | `fmt` | `gofumpt -w .` |
-| `fmt-check` | `sh -eu -c 'files="$(gofumpt -l .)"; test -z "$files"'` |
+| `fmt-check` | Reject files reported by `gofumpt -l .` |
 | `vet` | `go vet ./...` |
 | `lint` | `golangci-lint run` |
 | `test` | `go test ./...` |
-| `test-integration` | `go test -tags=integration,fixtures ./test/...` |
-| `generate` | `go generate ./...` |
-| `generate-check` | Regenerate, then check tracked and untracked generated outputs, for example `go generate ./... && git diff --exit-code HEAD -- ':(glob)**/*.gen.go' ':(glob)**/mocks/**' && test -z "$(git ls-files --others --exclude-standard -- ':(glob)**/*.gen.go' ':(glob)**/mocks/**')` |
-| `migrate-validate` | `goose -dir build/migrations/claimy validate` |
-| `secret-scan` | `gitleaks git --redact --no-banner` |
-| `build` | `go build ./cmd/claimy` |
-| `check` | Run `mise run fmt-check && mise run vet && mise run lint && mise run test && mise run test-integration && mise run generate-check && mise run migrate-validate && mise run secret-scan && mise run build` |
+| `secret-scan` | Redacted Gitleaks scans of all Git refs and working files |
+| `build` | Build `build/bin/claimy` |
+| `run` | `go run ./cmd/claimy` |
+| `check` | Version check, format check, vet, lint, test, secret scan, and build |
+
+`test-integration`, `generate`, `generate-check`, and `migrate-validate` remain future tasks, not no-op parts of the current check.
+The current executable has no domain tests; native and container HTTP smoke runs exercise its health surface.
 
 Contributor onboarding is `mise trust`, `mise install`, `mise run setup`, then `mise run check`.
-Keep ignored local credential/config, coverage, binary, and index artifacts out of commits; commit only safe example configuration.
-Use Gitleaks defaults and narrow reviewed exceptions, never copied broad allowlists.
-Use public GitHub Actions and Docker-capable Linux runners.
-Pin actions to commit SHAs when implemented.
-Run the same Mise checks and integration tests for pull requests, `main` pushes, and Git-tag pushes.
-Keep `permissions: contents: read`.
-Docker Hub authentication uses a separate token.
-Do not use private pipeline includes or private base images.
-This repository CI setup does not change GitLab job-identity support in Claimy's claim API.
-Build the application image with a public self-contained multi-stage Dockerfile.
-Include the application binary, safe distribution configuration, migrations, and Berlin timezone data.
-Helm, protobuf, and GitOps tools remain conditional on a real deployment or generation requirement.
-Codegraph or Git-work conveniences are optional and never CI prerequisites.
-
-Public workflow files and contributor docs are future requirements, not created by this plan.
+Commit only safe example configuration and use Gitleaks defaults without copied broad allowlists.
+The workflow uses public actions pinned to commit hashes on Docker-capable Linux runners.
+Pull requests, `main` pushes, and Git-tag pushes run the same repository checks and container health smoke.
+Repository permissions are `contents: read`; Docker Hub authentication uses its own token.
+There are no private pipeline includes, private base images, or automatic deployments.
+This repository CI does not change the future GitLab job-identity support in the claim API.
+The image includes the binary, safe distribution configuration, CA certificates, and embedded Berlin timezone data.
+Include migrations when they exist.
+Helm, protobuf, and GitOps tools remain conditional on real deployment or generation requirements.
+Codegraph and Git-work are optional local tools, not CI prerequisites.
 
 ### Docker Hub publishing
 
 Publish to `docker.io/beeemt/claimy` in the personal [Docker Hub repository](https://hub.docker.com/repository/docker/beeemt/claimy/general).
-Set the repository variable `DOCKERHUB_USERNAME` to `beeemt`.
+The login uses `DOCKERHUB_USERNAME` from an Actions secret or repository variable, with `beeemt` as its default.
 Store the Docker Hub token in the Actions secret `DOCKERHUB_TOKEN`.
 Use a Docker Hub personal access token with **Read & Write** permissions.
 Do not grant Delete or administrative access.
@@ -198,7 +192,7 @@ The [Docker publishing example](https://docs.docker.com/build/ci/github-actions/
 The [metadata action](https://github.com/docker/metadata-action#customizing) documents image tags, OCI labels, and the automatic `latest` default.
 Set `latest=true` so every publishing run includes that alias.
 Pass the resolved full commit hash as a raw tag instead of the default shortened, `sha-`-prefixed tag.
-Use these metadata inputs in the future publishing job:
+The publishing job uses these metadata inputs:
 
 ```yaml
 images: docker.io/beeemt/claimy
@@ -214,7 +208,7 @@ The `commit` step exports `git rev-parse HEAD` as its `sha` output.
 The metadata action uses the Git tag for its version label when present, otherwise the raw commit hash.
 Pass both metadata outputs, `tags` and `labels`, to the build/push action.
 Verify all published aliases resolve to the same pushed digest, including `latest`.
-These are implementation requirements only. No workflow, secret, image, or registry setting changed in this planning task.
+The workflow is implemented. Registry publication must be verified from a successful publishing run; local checks alone are not proof of publication.
 
 ## Architecture
 
@@ -656,8 +650,8 @@ Concurrency tests must use independent DB connections and barriers to prove the 
 
 ## Implementation sequence
 
-1. **Public repository setup and tooling.** Add the tooling configuration, public Go module/tool directives, safe configuration and generator sources, Goose validation, hooks, contributor docs, and GitHub Actions checks. Define the Docker Hub account configuration and image-tag contract. Gate: clean clones and worktrees use public dependencies. `mise run check` uses the same tasks as Docker-capable CI. S31-S35 pass. Keep the existing MIT license unchanged.
-2. **Bootstrap and deployment contract.** Add the Go service, migration runner, SQLC/SQLR wiring, router, and error mapping. Add the public multi-stage Dockerfile and publishing job after the application can build. Use the configured personal Docker Hub account and the commit/Git-tag rules above. Define canonical slug/email normalization and typed actor/request models. Configure the DB, MySQL version, timezone data, GitLab issuer/audience, Chat audience, and team Workspace/email domain. Do not add administrator roles or compliance gates. Gate: Migrations apply and reverse on disposable MySQL. Image publishing scenarios S36-S38 pass. Use public library APIs [E1,E2,E5,E6,E8,E10] only where applicable. Claimy owns composition and domain behavior.
+1. **Public repository setup and tooling.** The public Go module, safe runtime configuration, Mise checks, hooks, README, GitHub Actions, and Dockerfile now exist. Keep the MIT license unchanged. Add generator inputs, Go tool directives, Goose validation, and MySQL integration tasks only with their real behavior. Complete S31-S35 as those inputs become available; do not claim generator or domain acceptance from the health smoke.
+2. **Bootstrap and deployment contract.** The HTTP service and gated publishing workflow now exist. Add the migration runner, SQLC/SQLR wiring, claim routes, and error mapping with the domain implementation. Verify publishing scenarios S36-S38 against actual workflow runs. Define canonical slug/email normalization and typed actor/request models. Configure the DB, MySQL version, GitLab issuer/audience, Chat audience, and team Workspace/email domain. Do not add administrator roles or compliance gates. Gate: Migrations apply and reverse on disposable MySQL. Use public library APIs [E1,E2,E5,E6,E8,E10] only where applicable. Claimy owns composition and domain behavior.
 3. **Schema and transactional core.** Add the six tables and constraints above. Implement group upsert and row lock, app registration, DB operation time, current-read conflict query, and the atomic acquire/busy/idempotency transaction. Add unit tests for canonicalization and expiry calculations. Add isolated MySQL tests for S01-S14 and S24. Gate: Race tests prove same-owner multi-success, other-owner exactly-one-success, and no group/app phantom.
 4. **Claim lifecycle and temporal reads.** Implement read-only current, as-of, and future queries, release, compare-revision expiry change, immutable history versions, the 90-day cutoff, and safe retention pruning. Test S10-S20 and expiry-edit races. Gate: Old history never returns free. Current/future results stay coherent, and expired claims cannot be revived.
 5. **REST and CI identity.** Register typed acquisition/query/release/expiry handlers and read-only SQLH catalog routes. Add GitLab ID-token validation and the documented HTTP result contract. Use the documented single-operation CI caller in a test project. Test S21-S26 and S30. Gate: An authenticated team job proceeds only after an acquired and active result.
@@ -666,14 +660,17 @@ Concurrency tests must use independent DB connections and barriers to prove the 
 
 ## Verification and rollout
 
-Verification is a future implementation task. This plan has no implementation proof.
+Local verification passed: Mise checks, Prek hooks, workflow syntax validation, setup in the worktree and a disposable ordinary clone, and redacted Gitleaks detection of a disposable canary.
+Native and Linux/amd64 container runs returned HTTP 200 and `{}` from `/health`, returned 404 for an unimplemented claim route, and shut down with exit 0.
+Disposable Docker builds reproduced and then excluded local secret paths from the build context.
+These checks do not establish registry publication or completion of the claim-domain, MySQL, identity, and Chat scenarios below.
 Use the test harness's disposable `mysql:8.0.42` container, deterministic fixtures, and fixed clock; verify the supported production MySQL baseline separately before deployment.
 Run migrations and deterministic integration tests with independent connections.
 Inject commit, deadlock/retry, and unique-key races at the repository boundary.
 Run authentication tests with signed test keys, configured audiences, and team identities.
 Never point concurrency or failure-injection tests at a shared database.
 
-**Proposed commands/actions — not run.** Use `mise run migrate-validate`, `mise run test`, and `mise run test-integration`; the integration task runs `go test -tags=integration,fixtures ./test/...` against harness-managed disposable MySQL.
+**Future domain commands/actions — not run.** Add `mise run migrate-validate` and `mise run test-integration` with migrations and integration tests. The integration task should run `go test -tags=integration,fixtures ./test/...` against harness-managed disposable MySQL. The current `mise run test` reports no test files.
 Apply and reverse migrations only in disposable test databases; no default command targets a shared DB.
 Run `mise run check` for the full contributor/CI task set.
 Verify main-push, Git-tag-push, failed-check, and pull-request publishing behavior against the configured Docker Hub test repository.
@@ -687,7 +684,7 @@ Send structured commands from a dedicated Google Chat test space to the staged H
 Verify the formatted bot response and event deduplication.
 Capture only redacted request/result metadata.
 Never log ID tokens or Chat bearer tokens.
-These proposed commands and actions were not executed in this planning task.
+These domain and staged acceptance actions have not run.
 
 Before enabling consumers, verify these deployment prerequisites.
 MySQL must use InnoDB and enforce schema checks (8.0.16+).
@@ -707,4 +704,4 @@ Review acquisition/busy/expiry/release outcomes from persisted history.
 Verify a busy response never produces a claim.
 Check that query retention and replay retention follow the specified rules.
 Enable normal team use after the isolated and staged end-to-end gates pass.
-No application, configuration, dependency, CI, database, or Chat resource changed as part of this planning document.
+The repository now contains application, configuration, dependency, and CI files. No database, claim, Chat, or deployment resource has been changed by the repository setup.

@@ -1,0 +1,32 @@
+# Locally built executable and Go test output
+/build/bin/
+/coverage.out
+/coverage.html
+*.coverprofile
+*.prof
+*.test
+
+# Local configuration and credentials. Keep config.dist.yml and config.test.yml tracked.
+/config.local.yml
+/config.local.yaml
+/config.*.local.yml
+/config.*.local.yaml
+/.env
+/.env.*
+!/.env.example
+/.aws/
+/.secrets/
+/secrets/
+/credentials.json
+/credentials.local.json
+*.pem
+*.key
+
+# Local indexing and editor state
+/.codegraph/
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
