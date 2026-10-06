@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -67,6 +68,12 @@ func TestImageRuntimeIntegration(t *testing.T) {
 	configPath := writeImageConfig(t, tempDir, fixture, jwks.url)
 	container := startImage(t, image, configPath, jwks.caPath, suffix)
 	t.Cleanup(func() { container.cleanup(t) })
+	t.Cleanup(func() {
+		if t.Failed() {
+			logContainerFailureDiagnostics(t, container)
+			logDependencyFailureDiagnostics(t, fixture, jwks)
+		}
+	})
 
 	port := publishedPort(t, container.id)
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
@@ -90,7 +97,7 @@ func runRESTSmoke(t *testing.T, client *http.Client, baseURL string, fixture *su
 	status, body := postJSON(t, client, baseURL, "/v1/claims/acquire", restToken, map[string]any{
 		"group": restGroup, "environments": []string{"sandbox"}, "requestId": acquireRequestID,
 	})
-	requireStatus(t, status, http.StatusOK, "REST acquire")
+	requireStatus(t, status, http.StatusOK, "REST acquire", body)
 	var acquired acquireResponse
 	decodeJSON(t, body, &acquired, "REST acquire")
 	if !acquired.Acquired || acquired.Claim == nil || acquired.Claim.ID == "" {
@@ -104,7 +111,7 @@ func runRESTSmoke(t *testing.T, client *http.Client, baseURL string, fixture *su
 	status, body = postJSON(t, client, baseURL, "/v1/claims/query", restToken, map[string]any{
 		"group": restGroup, "environments": []string{"sandbox"},
 	})
-	requireStatus(t, status, http.StatusOK, "REST query")
+	requireStatus(t, status, http.StatusOK, "REST query", body)
 	var queried queryResponse
 	decodeJSON(t, body, &queried, "REST query")
 	if !queried.Known || len(queried.Claims) != 1 {
@@ -124,8 +131,8 @@ func runRESTSmoke(t *testing.T, client *http.Client, baseURL string, fixture *su
 	})
 	assertRequestResult(t, fixture, "rest_user", e2eRESTIssuer, restSubject, acquireRequestID, "acquired", restClaimID)
 
-	status, _ = postJSON(t, client, baseURL, "/v1/claims/"+restClaimID+"/release", restToken, map[string]string{"requestId": releaseRequestID})
-	requireStatus(t, status, http.StatusOK, "REST release")
+	status, body = postJSON(t, client, baseURL, "/v1/claims/"+restClaimID+"/release", restToken, map[string]string{"requestId": releaseRequestID})
+	requireStatus(t, status, http.StatusOK, "REST release", body)
 	assertClaimRow(t, fixture, restClaimID, restEmail, "manual", true, 2)
 	assertHistory(t, fixture, restClaimID, []historyRow{
 		{Revision: 1, ActorEmail: restEmail, ActorIssuer: e2eRESTIssuer, ActorSubject: restSubject, Channel: "rest", Action: "acquired"},
@@ -152,7 +159,7 @@ func runChatSmoke(t *testing.T, client *http.Client, baseURL string, fixture *su
 		},
 	}
 	status, body := postJSON(t, client, baseURL, "/v1/chat/events", chatToken, chatEvent)
-	requireStatus(t, status, http.StatusOK, "Google Chat command")
+	requireStatus(t, status, http.StatusOK, "Google Chat command", body)
 	var chatReply struct {
 		Text string `json:"text"`
 	}
@@ -533,10 +540,103 @@ func postJSON(t *testing.T, client *http.Client, baseURL, path, token string, va
 	return response.StatusCode, responseBody
 }
 
-func requireStatus(t *testing.T, got, want int, operation string) {
+func requireStatus(t *testing.T, got, want int, operation string, responseBody []byte) {
 	t.Helper()
 	if got != want {
-		t.Fatalf("%s returned HTTP %d, want %d", operation, got, want)
+		t.Fatalf("%s returned HTTP %d, want %d; response body: %s", operation, got, want, redactDiagnosticText(responseBody))
+	}
+}
+
+var diagnosticSecrets = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(bearer\s+)[^\s"'\\]+`),
+	regexp.MustCompile(`(?i)(["']?[[:alnum:]_.-]*(?:password|token|secret|authorization|private[_-]?key|dsn|uri)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,}]+)`),
+	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`),
+	regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^:/\s]+:)[^@/\s]+@`),
+}
+
+func TestRedactDiagnosticText(t *testing.T) {
+	cases := []struct {
+		name   string
+		input  string
+		secret string
+	}{
+		{name: "bearer", input: "Authorization: Bearer e30.eyJpayload.sig", secret: "e30.eyJpayload.sig"},
+		{name: "json credential", input: `{"database_password":"db-secret"}`, secret: "db-secret"},
+		{name: "dsn credential", input: "dsn=user:db-secret@tcp(db:3306)/claimy", secret: "db-secret"},
+		{name: "jwt", input: "token eyJheader.eyJpayload.eyJsignature", secret: "eyJheader.eyJpayload.eyJsignature"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redactDiagnosticText([]byte(tc.input))
+			if strings.Contains(got, tc.secret) {
+				t.Fatalf("diagnostic output leaked a secret: %s", got)
+			}
+			if !strings.Contains(got, "[REDACTED]") {
+				t.Fatalf("diagnostic output omitted the redaction marker: %s", got)
+			}
+		})
+	}
+}
+
+func logDependencyFailureDiagnostics(t *testing.T, fixture *support.Fixture, jwks *testJWKS) {
+	t.Helper()
+	t.Logf("HTTPS JWKS requests received before failure: %d", jwks.requests.Load())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := fixture.SQLDB.PingContext(ctx); err != nil {
+		t.Logf("disposable MySQL connectivity probe failed: %s", redactDiagnosticText([]byte(err.Error())))
+	} else {
+		t.Log("disposable MySQL connectivity probe succeeded")
+	}
+}
+
+func redactDiagnosticText(value []byte) string {
+	text := string(value)
+	for _, pattern := range diagnosticSecrets {
+		text = pattern.ReplaceAllString(text, "${1}[REDACTED]")
+	}
+	if len(text) > 2048 {
+		text = text[:2048] + "…[truncated]"
+	}
+
+	return fmt.Sprintf("%q", text)
+}
+
+func logContainerFailureDiagnostics(t *testing.T, container *imageContainer) {
+	t.Helper()
+	state, err := dockerCommand("inspect", "--format",
+		"status={{.State.Status}} exitCode={{.State.ExitCode}} error={{.State.Error}} oomKilled={{.State.OOMKilled}} startedAt={{.State.StartedAt}} finishedAt={{.State.FinishedAt}}",
+		container.id,
+	)
+	if err != nil {
+		t.Log("Claimy container exit diagnostics unavailable")
+	} else {
+		t.Logf("Claimy container exit diagnostics: %s", strings.TrimSpace(string(state)))
+	}
+
+	logs, err := dockerCommand("logs", "--tail", "200", container.id)
+	if err != nil {
+		t.Log("Claimy application error logs unavailable")
+
+		return
+	}
+	logged := 0
+	for _, line := range strings.Split(string(logs), "\n") {
+		lower := strings.ToLower(line)
+		if !strings.Contains(lower, "error") && !strings.Contains(lower, "fatal") &&
+			!strings.Contains(lower, "panic") && !strings.Contains(lower, "failed") {
+			continue
+		}
+		t.Logf("Claimy application error: %s", redactDiagnosticText([]byte(line)))
+		logged++
+		if logged == 50 {
+			t.Log("Claimy application error logs truncated after 50 matching lines")
+
+			return
+		}
+	}
+	if logged == 0 {
+		t.Log("Claimy container emitted no allowlisted application error log lines")
 	}
 }
 

@@ -654,6 +654,11 @@ Observed local verification:
 - In an isolated clone, `generate-check` rejects both changed OpenAPI inputs and untracked generated outputs.
 - Clean-clone hooks and secret scans pass. The installed pre-commit hook and directory scan both reject a synthetic high-entropy token canary.
 
+One local release-image smoke returned HTTP 500. Its cause is unclassified because the old harness discarded the response body and container logs.
+Failure diagnostics now capture redacted responses, application errors, container state, JWKS request counts, and MySQL connectivity.
+The same published `v1.2.3` image passes five consecutive instrumented runs without product changes.
+These passes do not establish the original failure's cause or claim that a product bug was fixed.
+
 The schema permits an inactive release result whose terminal retention boundary has already elapsed before the next daily prune.
 Claim expiry has no lifetime cap. Result-retention timestamps saturate at MySQL's maximum `DATETIME(6)` without changing claim expiry.
 
@@ -683,6 +688,7 @@ Observed publishing verification:
 - At publication, commit `94bcf10e8459c9f45c66609366913fb673ca43ce` and `latest` resolved to digest `sha256:5a2b7b1cd9c9f17c5e537cb3c298c1f74a8261e1d977a0cc4b69cc6de4f5ac66`. OCI revision and version matched the commit.
 - The published Linux/AMD64 image passes the signed REST, Chat, MySQL, health, and graceful-shutdown smoke.
 - [Failure-gate workflow 37484867130](https://github.com/beeemT/claimy/actions/runs/37484867130) rejects stale generated output. The eligible publishing job is skipped with no steps. Its temporary tag is removed.
+- [Annotated-tag workflow 37492169389](https://github.com/beeemT/claimy/actions/runs/37492169389) passes checks and publishing for `v1.2.3`. The release tag, full commit hash, and `latest` all resolve to `sha256:47dfc04b888d7053cabd78b0066116cd9b9e8b0b87e07368b1193526f1670e53`. OCI revision is commit `94bcf10e8459c9f45c66609366913fb673ca43ce`, not annotated tag object `b555803c792d7e6c5ec0e39fa6039b292e23cb13`. OCI version is `v1.2.3`. No additional release aliases were created.
 - [Same-repository PR workflow 37485348191](https://github.com/beeemT/claimy/actions/runs/37485348191) passes checks with read-only token permissions. Publishing is skipped with no steps.
 - Development uses the existing worktree and [PR #1](https://github.com/beeemT/claimy/pull/1). The user excluded live fork-run verification from S38; no fork was created.
 
