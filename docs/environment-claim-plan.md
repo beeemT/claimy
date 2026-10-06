@@ -104,7 +104,7 @@ oapi-codegen v2.4.1 generates typed models from static OpenAPI source.
 `go generate ./...` is authoritative. Matching Go tool directives and generated-drift checks are implemented.
 
 Goose v3.24.3 validates timestamped `Up`/`Down` SQL migrations under `build/migrations/claimy/`.
-Disposable MySQL tests apply and reverse them.
+Disposable MySQL fixtures apply them. A separate lifecycle test verifies `Up` → `Down` → `Up`.
 No default task may apply or roll back migrations on a shared database.
 Integration tests use Docker, the public disposable MySQL harness, deterministic fixtures, and a fixed test clock.
 Do not add a second MySQL CI service unless the harness requires it.
@@ -665,7 +665,7 @@ Claim expiry has no lifetime cap. Result-retention timestamps saturate at MySQL'
 Run `mise run check` for the full contributor and CI task set.
 Run `mise exec -- prek run --all-files` for installed hooks.
 Build `claimy:ci`, then set `CLAIMY_IMAGE=claimy:ci` for the real-image integration test.
-Tests apply and reverse migrations only in disposable databases.
+Fixtures apply migrations only in disposable databases. The migration lifecycle test also verifies reversal and restoration.
 Never point concurrency or failure-injection tests at a shared database.
 
 The local fixtures do not establish a live GitLab or Google Chat deployment.
@@ -688,7 +688,7 @@ Observed publishing verification:
 - At publication, commit `94bcf10e8459c9f45c66609366913fb673ca43ce` and `latest` resolved to digest `sha256:5a2b7b1cd9c9f17c5e537cb3c298c1f74a8261e1d977a0cc4b69cc6de4f5ac66`. OCI revision and version matched the commit.
 - The published Linux/AMD64 image passes the signed REST, Chat, MySQL, health, and graceful-shutdown smoke.
 - [Failure-gate workflow 37484867130](https://github.com/beeemT/claimy/actions/runs/37484867130) rejects stale generated output. The eligible publishing job is skipped with no steps. Its temporary tag is removed.
-- [Annotated-tag workflow 37492169389](https://github.com/beeemT/claimy/actions/runs/37492169389) passes checks and publishing for `v1.2.3`. The release tag, full commit hash, and `latest` all resolve to `sha256:47dfc04b888d7053cabd78b0066116cd9b9e8b0b87e07368b1193526f1670e53`. OCI revision is commit `94bcf10e8459c9f45c66609366913fb673ca43ce`, not annotated tag object `b555803c792d7e6c5ec0e39fa6039b292e23cb13`. OCI version is `v1.2.3`. No additional release aliases were created.
+- [Annotated-tag workflow 37492169389](https://github.com/beeemT/claimy/actions/runs/37492169389) passed checks and publishing for `v1.2.3`. At publication, the release tag, full commit hash, and `latest` resolved to `sha256:47dfc04b888d7053cabd78b0066116cd9b9e8b0b87e07368b1193526f1670e53`. OCI revision was commit `94bcf10e8459c9f45c66609366913fb673ca43ce`, not annotated tag object `b555803c792d7e6c5ec0e39fa6039b292e23cb13`. OCI version was `v1.2.3`. No additional release aliases were created.
 - [Same-repository PR workflow 37485348191](https://github.com/beeemT/claimy/actions/runs/37485348191) passes checks with read-only token permissions. Publishing is skipped with no steps.
 - Development uses the existing worktree and [PR #1](https://github.com/beeemT/claimy/pull/1). The user excluded live fork-run verification from S38; no fork was created.
 

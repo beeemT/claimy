@@ -26,7 +26,8 @@ mise run check
 The setup task downloads public Go modules and installs Prek Git hooks.
 An ordinary clone and a Git worktree use the same setup.
 The `worktree-setup` task also runs setup for worktree tools.
-Integration tests start disposable MySQL 8.0.42 containers and apply and reverse the real Goose migrations.
+Integration tests start disposable MySQL 8.0.42 containers and apply the real Goose migrations.
+A separate lifecycle test verifies migration reversal and restoration.
 They never use a shared database.
 
 ## Database and configuration

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -234,7 +235,7 @@ func runAcquireScenarios(t *testing.T, state acquisitionScenario) {
 	t.Run("S05 same-owner overlapping claims are independent", func(t *testing.T) { testAcquireSameOwnerOverlap(t, state) })
 	t.Run("S06 same owner is allowed and another owner is not", func(t *testing.T) { testAcquireOwnerPermissions(t, state) })
 	t.Run("S07 concurrent same-owner CI jobs both acquire", func(t *testing.T) { testAcquireConcurrentSameOwner(t, state) })
-	t.Run("S08 concurrent different owners have one winner", func(t *testing.T) { testAcquireConcurrentDifferentOwners(t, state) })
+	t.Run("S08 concurrent different owners identify the winning blocker", func(t *testing.T) { testAcquireConcurrentDifferentOwners(t, state) })
 	t.Run("S09 registration and app-group acquisition serialize", func(t *testing.T) { testAcquireRegistrationRace(t, state) })
 	t.Run("S10 expiry equality uses half-open activity", func(t *testing.T) { testAcquireExpiryBoundary(t, state) })
 	t.Run("S11 Berlin default expiry handles both DST changes for manual and CI", func(t *testing.T) { testAcquireDefaultExpiryDST(t, state) })
@@ -249,6 +250,8 @@ func runAcquireScenarios(t *testing.T, state acquisitionScenario) {
 		testAcquireCrossGroupRace(t, state)
 	})
 	t.Run("S23 successful replay reports current inactive state", func(t *testing.T) { testAcquireInactiveReplay(t, state) })
+	t.Run("S24 natural expiry replay preserves the original claim", func(t *testing.T) { testAcquireExpiredReplay(t, state) })
+	t.Run("S25 busy replay remains busy after its blocker is released", func(t *testing.T) { testAcquireBusyReplayAfterRelease(t, state) })
 }
 
 func testAcquireAppSandbox(t *testing.T, state acquisitionScenario) {
@@ -399,18 +402,28 @@ func testAcquireConcurrentDifferentOwners(t *testing.T, state acquisitionScenari
 	outcomes := acquireInGoroutines(state.ctx, []*Repository{firstRepo, secondRepo}, actors, requests)
 	winners := 0
 	losers := 0
+	winnerClaimID := ""
+	var losingResult claims.AcquireResult
 	for _, outcome := range outcomes {
 		if outcome.Err != nil {
 			t.Fatalf("different-owner race returned a storage error: %v", outcome.Err)
 		}
 		if outcome.Result.Acquired {
 			winners++
+			if outcome.Result.Claim == nil {
+				t.Fatalf("different-owner winner returned no claim: %+v", outcome.Result)
+			}
+			winnerClaimID = outcome.Result.Claim.ID
 		} else if len(outcome.Result.Conflicts) > 0 {
 			losers++
+			losingResult = outcome.Result
 		}
 	}
 	if winners != 1 || losers != 1 {
 		t.Fatalf("different-owner race results: winners=%d losers=%d (%+v)", winners, losers, outcomes)
+	}
+	if len(losingResult.Conflicts) != 1 || losingResult.Conflicts[0].ID != winnerClaimID {
+		t.Fatalf("different-owner race loser did not identify the winning claim %q: %+v", winnerClaimID, losingResult)
 	}
 }
 
@@ -636,6 +649,64 @@ func testAcquireInactiveReplay(t *testing.T, state acquisitionScenario) {
 	replay := mustAcquire(state.ctx, t, state.repository, ci, request)
 	if !replay.Acquired || replay.Claim.ID != first.Claim.ID || replay.Claim.ActiveNow {
 		t.Fatalf("acquisition replay did not reflect current inactive state: %+v", replay)
+	}
+}
+
+func testAcquireExpiredReplay(t *testing.T, state acquisitionScenario) {
+	actor := testActor("expired-replay@example.test", "s24", claims.REST, "", "")
+	operationStart := state.wallNow.Add(-time.Hour)
+	expiresAt := state.wallNow.Add(-30 * time.Minute)
+	setOperationTime(state.repository, operationStart)
+	request := acquireRequest(actor, "s24-expired", "s24-payload", claims.Scope{Group: "s24-expired", App: "api"}, []claims.Environment{claims.Sandbox}, fixedPointer(expiresAt))
+	original := mustAcquire(state.ctx, t, state.repository, actor, request)
+	if !original.Acquired || original.Claim == nil || !original.Claim.ActiveNow {
+		t.Fatalf("initial acquisition did not return an active claim: %+v", original)
+	}
+	claimsBefore := countRows(t, state.fixture.SQLDB, `SELECT COUNT(*) FROM claims c JOIN app_groups g ON g.id = c.group_id WHERE g.canonical_name = ?`, "s24-expired")
+	versionsBefore := countRows(t, state.fixture.SQLDB, `SELECT COUNT(*) FROM claim_versions WHERE claim_id = ?`, original.Claim.ID)
+	setOperationTime(state.repository, expiresAt)
+	replay := mustAcquire(state.ctx, t, state.repository, actor, request)
+	if !replay.Acquired || replay.Claim == nil {
+		t.Fatalf("expired successful replay did not return its original claim: %+v", replay)
+	}
+	expected := *original.Claim
+	expected.ActiveNow = false
+	if !reflect.DeepEqual(replay.Claim, &expected) {
+		t.Fatalf("expired successful replay changed original claim facts: got=%+v want=%+v", replay.Claim, expected)
+	}
+	if claimsAfter := countRows(t, state.fixture.SQLDB, `SELECT COUNT(*) FROM claims c JOIN app_groups g ON g.id = c.group_id WHERE g.canonical_name = ?`, "s24-expired"); claimsAfter != claimsBefore {
+		t.Fatalf("expired replay created another claim: before=%d after=%d", claimsBefore, claimsAfter)
+	}
+	if versionsAfter := countRows(t, state.fixture.SQLDB, `SELECT COUNT(*) FROM claim_versions WHERE claim_id = ?`, original.Claim.ID); versionsAfter != versionsBefore {
+		t.Fatalf("expired replay created claim history: before=%d after=%d", versionsBefore, versionsAfter)
+	}
+	setOperationTime(state.repository, state.wallNow)
+}
+
+func testAcquireBusyReplayAfterRelease(t *testing.T, state acquisitionScenario) {
+	blocker := mustAcquire(state.ctx, t, state.repository, state.owner, acquireRequest(state.owner, "s25-blocker", "s25-blocker", claims.Scope{Group: "s25-busy-replay", App: "api"}, []claims.Environment{claims.Sandbox}, fixedPointer(state.expiresAt)))
+	if !blocker.Acquired || blocker.Claim == nil {
+		t.Fatalf("busy-replay blocker was not acquired: %+v", blocker)
+	}
+	request := acquireRequest(state.other, "s25-busy", "s25-payload", claims.Scope{Group: "s25-busy-replay", App: "api"}, []claims.Environment{claims.Sandbox}, fixedPointer(state.expiresAt))
+	busy := mustAcquire(state.ctx, t, state.repository, state.other, request)
+	if busy.Acquired || busy.Claim != nil || len(busy.Conflicts) != 1 || busy.Conflicts[0].ID != blocker.Claim.ID {
+		t.Fatalf("initial busy request did not save the blocker result: %+v", busy)
+	}
+	mustRelease(state.ctx, t, state.repository, state.other, blocker.Claim.ID, "s25-release", "s25-release")
+	replay := mustAcquire(state.ctx, t, state.repository, state.other, request)
+	if !reflect.DeepEqual(replay, busy) {
+		t.Fatalf("busy replay changed after its blocker was released: got=%+v want=%+v", replay, busy)
+	}
+	fresh := mustAcquire(state.ctx, t, state.repository, state.other, acquireRequest(state.other, "s25-fresh", "s25-payload", request.Scope, request.Environments, fixedPointer(state.expiresAt)))
+	if !fresh.Acquired || fresh.Claim == nil {
+		t.Fatalf("fresh request did not acquire after blocker release: %+v", fresh)
+	}
+	if countRows(t, state.fixture.SQLDB, `SELECT COUNT(*) FROM claims c JOIN app_groups g ON g.id = c.group_id WHERE g.canonical_name = ?`, "s25-busy-replay") != 2 {
+		t.Fatal("busy replay created a claim or fresh request did not persist its new claim")
+	}
+	if countRows(t, state.fixture.SQLDB, `SELECT COUNT(*) FROM request_results WHERE request_id = ? AND outcome = 'busy' AND claim_id IS NULL`, "s25-busy") != 1 {
+		t.Fatal("saved busy request result was changed while the blocker was released")
 	}
 }
 
