@@ -623,7 +623,7 @@ Concurrency tests must use independent DB connections and barriers to prove the 
 | S35 | Public dependency, config, and CI boundary | Inspect the Go dependency graph and sample config, then exercise pull-request CI metadata | Dependencies and configs use public sources and dummy values with no private replacements, nonpublic hosts, or committed secrets. CI uses public actions/runners with read-only permissions. Pull requests never publish or deploy. |
 | S36 | Main push publishes the commit image | Run a successful `main` push, then separately fail a required check | Success publishes the full checked-out commit hash and `latest` tags on the same digest, with matching OCI revision/version labels. Failed checks cause no registry login or push. |
 | S37 | Git-tag push publishes all aliases | Push `v1.2.3` for a known commit, including an annotated-tag case | The full commit hash, `v1.2.3`, and `latest` image tags resolve to the same pushed digest. OCI revision is the commit hash, not the tag object. OCI version retains `v1.2.3`. No extra aliases appear. |
-| S38 | Pull requests cannot publish | Run same-repository and fork pull-request workflows | Checks run with read-only permissions. No publishing job, Docker Hub login, or registry-secret access occurs. |
+| S38 | Pull requests cannot publish | Run the same-repository pull-request workflow from the existing worktree branch | Checks run with read-only permissions. No publishing job, Docker Hub login, or registry-secret access occurs. Live fork-run verification is excluded from this task by user decision. |
 
 ## Implementation sequence
 
@@ -641,6 +641,7 @@ Observed local verification:
 
 - The full `mise run check` task passes, including formatting, vet, lint, unit and MySQL integration tests, generation, migration validation, secret scans, and native build.
 - The resolved Go graph contains 562 modules and no module replacements.
+- A clean clone and separate worktree both pass trust, tool installation, and setup with isolated homes and fresh module caches. All 561 external modules download through the public proxy with authentication disabled. Both layouts resolve the same 3,405 graph edges and install executable Prek hooks.
 - The native executable builds and `go vet ./...` passes.
 - Auth and domain tests pass with the race detector.
 - The MySQL scenario suite passes against disposable MySQL 8.0.42, including independent-connection barriers and actual lost-COMMIT-acknowledgement replay.
@@ -650,6 +651,8 @@ Observed local verification:
 - The actual `claimy:ci` image passes HTTPS-JWKS, REST, Chat, persisted MySQL history, health, and graceful-shutdown smoke.
 - Goose migration validation, module/tool version alignment, clean generation, and redacted secret scans pass.
 - Gitleaks rejects a disposable synthetic token canary.
+- In an isolated clone, `generate-check` rejects both changed OpenAPI inputs and untracked generated outputs.
+- Clean-clone hooks and secret scans pass. The installed pre-commit hook and directory scan both reject a synthetic high-entropy token canary.
 
 The schema permits an inactive release result whose terminal retention boundary has already elapsed before the next daily prune.
 Claim expiry has no lifetime cap. Result-retention timestamps saturate at MySQL's maximum `DATETIME(6)` without changing claim expiry.
@@ -674,6 +677,14 @@ Verify acquired, busy, inactive replay, auth/storage failures, formatted replies
 Capture only redacted request/result metadata. Never log bearer tokens.
 No shared production database, Chat app, or deployment resource was changed by local tests.
 
-Publishing acceptance S36-S38 also requires current workflow-run and registry evidence.
-Successful main/tag pushes must preserve the full commit hash, exact release tag, `latest`, matching digest, and OCI labels.
+Observed publishing verification:
+
+- [Main workflow 37484350730](https://github.com/beeemT/claimy/actions/runs/37484350730) passes repository checks, actual-image smoke, and publishing.
+- At publication, commit `94bcf10e8459c9f45c66609366913fb673ca43ce` and `latest` resolved to digest `sha256:5a2b7b1cd9c9f17c5e537cb3c298c1f74a8261e1d977a0cc4b69cc6de4f5ac66`. OCI revision and version matched the commit.
+- The published Linux/AMD64 image passes the signed REST, Chat, MySQL, health, and graceful-shutdown smoke.
+- [Failure-gate workflow 37484867130](https://github.com/beeemT/claimy/actions/runs/37484867130) rejects stale generated output. The eligible publishing job is skipped with no steps. Its temporary tag is removed.
+- [Same-repository PR workflow 37485348191](https://github.com/beeemT/claimy/actions/runs/37485348191) passes checks with read-only token permissions. Publishing is skipped with no steps.
+- Development uses the existing worktree and [PR #1](https://github.com/beeemT/claimy/pull/1). The user excluded live fork-run verification from S38; no fork was created.
+
+Release pushes must preserve the full commit hash, exact release tag, `latest`, matching digest, and OCI labels.
 Failed checks and pull requests must not execute registry login or publishing.
