@@ -162,7 +162,10 @@ Public workflow files and contributor docs are future requirements, not created 
 
 Publish to `docker.io/<DOCKERHUB_USERNAME>/claimy` in the configured personal Docker Hub account.
 Set the repository variable `DOCKERHUB_USERNAME` and the Actions secret `DOCKERHUB_TOKEN`.
-Use a Docker Hub access token with push permission for the configured repository.
+Use a Docker Hub personal access token with **Read & Write** permissions.
+Do not grant Delete or administrative access.
+The account must own the image repository or have write access to it.
+Follow the [Docker personal access token instructions](https://docs.docker.com/security/access-tokens/personal-access-tokens/) to create the token.
 Keep credentials out of the source, build arguments, image, and logs.
 Keep Docker Hub repository visibility as configured.
 
@@ -178,25 +181,27 @@ Build once per publishing job and apply all requested image tags to that build.
 
 | Trigger | Published image tags | OCI image labels |
 |---|---|---|
-| Push to `main` | `<DOCKERHUB_USERNAME>/claimy:<full-commit-sha>` | `org.opencontainers.image.revision=<full-commit-sha>` and `org.opencontainers.image.version=<full-commit-sha>` |
-| Git-tag push, for example `v1.2.3` | Both `:<full-commit-sha>` and `:v1.2.3` on the same image | Revision is the full commit hash. Version is the Git tag, including its leading `v`. |
+| Push to `main` | `<DOCKERHUB_USERNAME>/claimy:<full-commit-sha>` and `:latest` on the same image | `org.opencontainers.image.revision=<full-commit-sha>` and `org.opencontainers.image.version=<full-commit-sha>` |
+| Git-tag push, for example `v1.2.3` | `:<full-commit-sha>`, `:v1.2.3`, and `:latest` on the same image | Revision is the full commit hash. Version is the Git tag, including its leading `v`. |
 | Pull request or failed checks | None | No image publication |
 
 The registry references above are Docker image **tags**.
 Also set the OCI **labels** so the image records its source commit and release version.
-Do not add `latest`, branch names, shortened hashes, or extra version aliases.
+Update `latest` on every successful `main` or Git-tag publication.
+It is a moving alias for the most recently published image, not a fixed source version.
+Do not add branch names, shortened hashes, or extra version aliases.
 Release Git tags must be valid Docker image tag names so the image tag can retain the exact Git tag.
 
 Use the public Docker login, Buildx, metadata, and build/push actions.
 The [Docker publishing example](https://docs.docker.com/build/ci/github-actions/push-multi-registries/) documents Docker Hub credentials and the build/push action.
 The [metadata action](https://github.com/docker/metadata-action#customizing) documents image tags, OCI labels, and the automatic `latest` default.
-Disable that default with `latest=false`.
+Set `latest=true` so every publishing run includes that alias.
 Pass the resolved full commit hash as a raw tag instead of the default shortened, `sha-`-prefixed tag.
 Use these metadata inputs in the future publishing job:
 
 ```yaml
 images: docker.io/${{ vars.DOCKERHUB_USERNAME }}/claimy
-flavor: latest=false
+flavor: latest=true
 tags: |
   type=raw,value=${{ steps.commit.outputs.sha }}
   type=ref,event=tag
@@ -207,7 +212,7 @@ labels: |
 The `commit` step exports `git rev-parse HEAD` as its `sha` output.
 The metadata action uses the Git tag for its version label when present, otherwise the raw commit hash.
 Pass both metadata outputs, `tags` and `labels`, to the build/push action.
-Verify both aliases resolve to the same pushed digest on Git-tag runs.
+Verify all published aliases resolve to the same pushed digest, including `latest`.
 These are implementation requirements only. No workflow, secret, image, or registry setting changed in this planning task.
 
 ## Architecture
@@ -644,8 +649,8 @@ Concurrency tests must use independent DB connections and barriers to prove the 
 | S33 | Generated drift is rejected | In an isolated checkout, change an OpenAPI or mock generator input without updating its outputs, then separately add an untracked generated output and run `generate-check` | Both forms of drift fail; a clean `go generate ./...` leaves generated outputs unchanged. |
 | S34 | Hooks and secret scanning work | Install hooks from a clean clone; run `prek run --all-files` and `mise run secret-scan` on safe examples and a disposable canary-secret fixture | Hooks and scans run as configured, reject the canary, and do not require broad allowlists or real credentials. |
 | S35 | Public dependency, config, and CI boundary | Inspect the Go dependency graph and sample config, then exercise pull-request CI metadata | Dependencies and configs use public sources and dummy values with no private replacements, nonpublic hosts, or committed secrets. CI uses public actions/runners with read-only permissions. Pull requests never publish or deploy. |
-| S36 | Main push publishes the commit image | Run a successful `main` push, then separately fail a required check | Success publishes the full checked-out commit hash as the sole image tag, with matching OCI revision/version labels. Failed checks cause no registry login or push. |
-| S37 | Git-tag push publishes both aliases | Push `v1.2.3` for a known commit, including an annotated-tag case | Both the full commit hash and `v1.2.3` image tags resolve to the same pushed digest. OCI revision is the commit hash, not the tag object. OCI version retains `v1.2.3`. No `latest` or extra aliases appear. |
+| S36 | Main push publishes the commit image | Run a successful `main` push, then separately fail a required check | Success publishes the full checked-out commit hash and `latest` tags on the same digest, with matching OCI revision/version labels. Failed checks cause no registry login or push. |
+| S37 | Git-tag push publishes all aliases | Push `v1.2.3` for a known commit, including an annotated-tag case | The full commit hash, `v1.2.3`, and `latest` image tags resolve to the same pushed digest. OCI revision is the commit hash, not the tag object. OCI version retains `v1.2.3`. No extra aliases appear. |
 | S38 | Pull requests cannot publish | Run same-repository and fork pull-request workflows | Checks run with read-only permissions. No publishing job, Docker Hub login, or registry-secret access occurs. |
 
 ## Implementation sequence
