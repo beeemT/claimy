@@ -117,7 +117,8 @@ Integration tests require Docker and use the public test harness's disposable `m
 | `.gitleaks.toml` | Gitleaks defaults with only narrow, reviewed exceptions |
 | `.gitignore` | Ignore local credentials/config, coverage, binaries, and local index artifacts |
 | `config.dist.yml`, `config.test.yml` | Committed examples with dummy values only |
-| `.github/workflows/ci.yml` | Public GitHub Actions checks invoking the same Mise tasks |
+| `.github/workflows/ci.yml` | Public GitHub Actions checks and gated publishing to the personal Docker Hub account |
+| `Dockerfile`, `.dockerignore` | Public multi-stage application build, with local credentials, configuration, and Git metadata excluded |
 | `README.md`, `CONTRIBUTING.md` | Public contributor onboarding and repository conventions |
 | Existing `LICENSE` | Retain unchanged MIT license |
 
@@ -143,13 +144,71 @@ Define these executable Mise tasks; the contributor and CI paths must use the sa
 Contributor onboarding is `mise trust`, `mise install`, `mise run setup`, then `mise run check`.
 Keep ignored local credential/config, coverage, binary, and index artifacts out of commits; commit only safe example configuration.
 Use Gitleaks defaults and narrow reviewed exceptions, never copied broad allowlists.
-GitHub Actions is Claimy's repository CI: pin public actions and select public runners when implemented, grant only read permissions for pull requests (for example, `permissions: contents: read`), and run the same Mise checks including integration on Docker-capable Linux.
-Do not add private pipeline includes, images, registries, or default publish/deploy jobs.
+Use public GitHub Actions and Docker-capable Linux runners.
+Pin actions to commit SHAs when implemented.
+Run the same Mise checks and integration tests for pull requests, `main` pushes, and Git-tag pushes.
+Keep `permissions: contents: read`.
+Docker Hub authentication uses a separate token.
+Do not use private pipeline includes or private base images.
 This repository CI setup does not change GitLab job-identity support in Claimy's claim API.
-If image packaging is later needed, use a public self-contained multi-stage Go build and runtime; Helm, protobuf, and GitOps tools are conditional on a real chart, protobuf, or deployment requirement.
+Build the application image with a public self-contained multi-stage Dockerfile.
+Include the application binary, safe distribution configuration, migrations, and Berlin timezone data.
+Helm, protobuf, and GitOps tools remain conditional on a real deployment or generation requirement.
 Codegraph or Git-work conveniences are optional and never CI prerequisites.
 
 Public workflow files and contributor docs are future requirements, not created by this plan.
+
+### Docker Hub publishing
+
+Publish to `docker.io/<DOCKERHUB_USERNAME>/claimy` in the configured personal Docker Hub account.
+Set the repository variable `DOCKERHUB_USERNAME` and the Actions secret `DOCKERHUB_TOKEN`.
+Use a Docker Hub access token with push permission for the configured repository.
+Keep credentials out of the source, build arguments, image, and logs.
+Keep Docker Hub repository visibility as configured.
+
+Run the publishing job only after all checks pass.
+Allow publishing for `push` events on `main` and Git tags (`tags: ['**']`).
+Pull requests run checks without registry login, registry secrets, or publishing.
+Do not use `pull_request_target` to publish pull-request code.
+Do not add automatic deployment jobs.
+
+Use the full commit hash from `git rev-parse HEAD` after checkout.
+For an annotated Git tag, use its checked-out commit, not the tag object's hash.
+Build once per publishing job and apply all requested image tags to that build.
+
+| Trigger | Published image tags | OCI image labels |
+|---|---|---|
+| Push to `main` | `<DOCKERHUB_USERNAME>/claimy:<full-commit-sha>` | `org.opencontainers.image.revision=<full-commit-sha>` and `org.opencontainers.image.version=<full-commit-sha>` |
+| Git-tag push, for example `v1.2.3` | Both `:<full-commit-sha>` and `:v1.2.3` on the same image | Revision is the full commit hash. Version is the Git tag, including its leading `v`. |
+| Pull request or failed checks | None | No image publication |
+
+The registry references above are Docker image **tags**.
+Also set the OCI **labels** so the image records its source commit and release version.
+Do not add `latest`, branch names, shortened hashes, or extra version aliases.
+Release Git tags must be valid Docker image tag names so the image tag can retain the exact Git tag.
+
+Use the public Docker login, Buildx, metadata, and build/push actions.
+The [Docker publishing example](https://docs.docker.com/build/ci/github-actions/push-multi-registries/) documents Docker Hub credentials and the build/push action.
+The [metadata action](https://github.com/docker/metadata-action#customizing) documents image tags, OCI labels, and the automatic `latest` default.
+Disable that default with `latest=false`.
+Pass the resolved full commit hash as a raw tag instead of the default shortened, `sha-`-prefixed tag.
+Use these metadata inputs in the future publishing job:
+
+```yaml
+images: docker.io/${{ vars.DOCKERHUB_USERNAME }}/claimy
+flavor: latest=false
+tags: |
+  type=raw,value=${{ steps.commit.outputs.sha }}
+  type=ref,event=tag
+labels: |
+  org.opencontainers.image.revision=${{ steps.commit.outputs.sha }}
+```
+
+The `commit` step exports `git rev-parse HEAD` as its `sha` output.
+The metadata action uses the Git tag for its version label when present, otherwise the raw commit hash.
+Pass both metadata outputs, `tags` and `labels`, to the build/push action.
+Verify both aliases resolve to the same pushed digest on Git-tag runs.
+These are implementation requirements only. No workflow, secret, image, or registry setting changed in this planning task.
 
 ## Architecture
 
@@ -584,12 +643,15 @@ Concurrency tests must use independent DB connections and barriers to prove the 
 | S32 | Tool versions agree | Compare the Go directive, generator module versions, and Mise-pinned tool versions | `go.mod` Go version matches Mise; Mockery and oapi-codegen tool directives resolve to module versions matching Mise; local and CI resolve the same Goose CLI. |
 | S33 | Generated drift is rejected | In an isolated checkout, change an OpenAPI or mock generator input without updating its outputs, then separately add an untracked generated output and run `generate-check` | Both forms of drift fail; a clean `go generate ./...` leaves generated outputs unchanged. |
 | S34 | Hooks and secret scanning work | Install hooks from a clean clone; run `prek run --all-files` and `mise run secret-scan` on safe examples and a disposable canary-secret fixture | Hooks and scans run as configured, reject the canary, and do not require broad allowlists or real credentials. |
-| S35 | Public dependency, config, and CI boundary | Inspect the Go dependency graph and sample config, then exercise pull-request CI metadata | Dependencies and configs use public sources and dummy values with no private replacements, nonpublic hosts, or secrets; CI uses public actions/runners with read-only pull-request permissions and no default publish/deploy jobs. |
+| S35 | Public dependency, config, and CI boundary | Inspect the Go dependency graph and sample config, then exercise pull-request CI metadata | Dependencies and configs use public sources and dummy values with no private replacements, nonpublic hosts, or committed secrets. CI uses public actions/runners with read-only permissions. Pull requests never publish or deploy. |
+| S36 | Main push publishes the commit image | Run a successful `main` push, then separately fail a required check | Success publishes the full checked-out commit hash as the sole image tag, with matching OCI revision/version labels. Failed checks cause no registry login or push. |
+| S37 | Git-tag push publishes both aliases | Push `v1.2.3` for a known commit, including an annotated-tag case | Both the full commit hash and `v1.2.3` image tags resolve to the same pushed digest. OCI revision is the commit hash, not the tag object. OCI version retains `v1.2.3`. No `latest` or extra aliases appear. |
+| S38 | Pull requests cannot publish | Run same-repository and fork pull-request workflows | Checks run with read-only permissions. No publishing job, Docker Hub login, or registry-secret access occurs. |
 
 ## Implementation sequence
 
-1. **Public repository setup and tooling.** Add the planned file matrix, pinned Mise tools, Go module/tool directives, public configuration and generator sources, Goose validation, hooks/secret scanning, contributor docs, and GitHub Actions. Gate: clean clones and worktrees set up from public dependencies; `mise run check` uses the same tasks as Docker-capable CI; S31-S35 pass. Keep the existing MIT license unchanged.
-2. **Bootstrap and deployment contract.** Add the Go service/module, configuration, migration runner, SQLC/SQLR wiring, router, and error mapping. Define canonical slug/email normalization and typed actor/request models. Configure the DB, MySQL version, timezone data, GitLab issuer/audience, Chat audience, and team Workspace/email domain. Do not add administrator roles or compliance gates. Gate: Migrations apply and reverse on disposable MySQL. Use public library APIs [E1,E2,E5,E6,E8,E10] only where applicable; Claimy owns composition and domain behavior.
+1. **Public repository setup and tooling.** Add the tooling configuration, public Go module/tool directives, safe configuration and generator sources, Goose validation, hooks, contributor docs, and GitHub Actions checks. Define the Docker Hub account configuration and image-tag contract. Gate: clean clones and worktrees use public dependencies. `mise run check` uses the same tasks as Docker-capable CI. S31-S35 pass. Keep the existing MIT license unchanged.
+2. **Bootstrap and deployment contract.** Add the Go service, migration runner, SQLC/SQLR wiring, router, and error mapping. Add the public multi-stage Dockerfile and publishing job after the application can build. Use the configured personal Docker Hub account and the commit/Git-tag rules above. Define canonical slug/email normalization and typed actor/request models. Configure the DB, MySQL version, timezone data, GitLab issuer/audience, Chat audience, and team Workspace/email domain. Do not add administrator roles or compliance gates. Gate: Migrations apply and reverse on disposable MySQL. Image publishing scenarios S36-S38 pass. Use public library APIs [E1,E2,E5,E6,E8,E10] only where applicable. Claimy owns composition and domain behavior.
 3. **Schema and transactional core.** Add the six tables and constraints above. Implement group upsert and row lock, app registration, DB operation time, current-read conflict query, and the atomic acquire/busy/idempotency transaction. Add unit tests for canonicalization and expiry calculations. Add isolated MySQL tests for S01-S14 and S24. Gate: Race tests prove same-owner multi-success, other-owner exactly-one-success, and no group/app phantom.
 4. **Claim lifecycle and temporal reads.** Implement read-only current, as-of, and future queries, release, compare-revision expiry change, immutable history versions, the 90-day cutoff, and safe retention pruning. Test S10-S20 and expiry-edit races. Gate: Old history never returns free. Current/future results stay coherent, and expired claims cannot be revived.
 5. **REST and CI identity.** Register typed acquisition/query/release/expiry handlers and read-only SQLH catalog routes. Add GitLab ID-token validation and the documented HTTP result contract. Use the documented single-operation CI caller in a test project. Test S21-S26 and S30. Gate: An authenticated team job proceeds only after an acquired and active result.
@@ -608,6 +670,9 @@ Never point concurrency or failure-injection tests at a shared database.
 **Proposed commands/actions — not run.** Use `mise run migrate-validate`, `mise run test`, and `mise run test-integration`; the integration task runs `go test -tags=integration,fixtures ./test/...` against harness-managed disposable MySQL.
 Apply and reverse migrations only in disposable test databases; no default command targets a shared DB.
 Run `mise run check` for the full contributor/CI task set.
+Verify main-push, Git-tag-push, failed-check, and pull-request publishing behavior against the configured Docker Hub test repository.
+Inspect the published image tags, OCI labels, and digest for S36-S38.
+Never use real registry credentials in local fixtures or pull-request tests.
 Then start the actual Claimy server against disposable test DB state.
 Test the registered routes, not only the domain service.
 Run a GitLab test job with an ID-token audience equal to the staged endpoint.
