@@ -59,3 +59,17 @@ if [ "$go_mod_version" != "$mise_go_version" ]; then
   printf 'error: Go version mismatch: go.mod=%s mise.toml=%s\n' "$go_mod_version" "$mise_go_version" >&2
   exit 1
 fi
+
+for tool_module in \
+  'mockery github.com/vektra/mockery/v3' \
+  'oapi-codegen github.com/oapi-codegen/oapi-codegen/v2' \
+  'go:github.com/pressly/goose/v3/cmd/goose github.com/pressly/goose/v3'
+do
+  set -- $tool_module
+  pinned=$(mise current "$1")
+  module_version=$(go list -m -f '{{.Version}}' "$2")
+  if [ "$module_version" != "v$pinned" ]; then
+    printf 'error: %s version mismatch: go.mod=%s mise=%s\n' "$1" "$module_version" "$pinned" >&2
+    exit 1
+  fi
+done

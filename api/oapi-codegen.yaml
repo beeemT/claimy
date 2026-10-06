@@ -1,0 +1,7 @@
+package: api
+output: internal/api/models.gen.go
+generate:
+  models: true
+  client: false
+  gin-server: false
+  chi-server: false

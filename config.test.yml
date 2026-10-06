@@ -1,0 +1,21 @@
+app:
+  env: test
+
+dx:
+  use_random_port: false
+
+# Integration tests obtain a new database from the disposable MySQL harness.
+# They apply and reverse migrations explicitly; this file never targets a shared DB.
+sqlc:
+  default:
+    parameters:
+      loc: UTC
+      time_zone: "'+00:00'"
+    migrations:
+      enabled: false
+      path: build/migrations/claimy
+
+claimy:
+  mysql_version: 8.0.42
+  auth:
+    team_domain: example.com

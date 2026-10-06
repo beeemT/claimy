@@ -1,0 +1,14 @@
+template: testify
+dir: '{{.InterfaceDir}}/mocks'
+filename: '{{.InterfaceName}}.go'
+pkgname: mocks
+structname: '{{.Mock}}{{.InterfaceName}}'
+force-file-write: true
+formatter: goimports
+packages:
+  github.com/beeemT/claimy/internal/claims:
+    interfaces:
+      Store:
+  github.com/beeemT/claimy/internal/auth:
+    interfaces:
+      KeyProvider:

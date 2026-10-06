@@ -1,0 +1,20 @@
+# Neutral example: configure CLAIMY_URL, CLAIMY_GROUP, and the optional app/expiry variables.
+claim:
+  image: alpine:3.20
+  variables:
+    CLAIMY_ENVIRONMENTS: '["sandbox"]'
+  id_tokens:
+    CLAIMY_ID_TOKEN:
+      aud: https://claimy.example.invalid/
+  before_script:
+    - apk add --no-cache bash curl jq
+  script:
+    - export CLAIMY_REQUEST_ID="${CI_PROJECT_ID}-${CI_JOB_ID}-claim"
+    # Keep the acquired ID in the workspace: GitLab runs after_script in a
+    # separate shell and does not retain script-shell exports there.
+    - bash ./scripts/ci-acquire.sh > .claimy-claim-id
+    - export CLAIMY_CLAIM_ID="$(cat .claimy-claim-id)"
+    - ./deploy.sh
+  after_script:
+    # Cleanup is best effort and MUST NOT replace the deployment result.
+    - if [ -s .claimy-claim-id ]; then CLAIMY_CLAIM_ID="$(cat .claimy-claim-id)" bash ./scripts/ci-release.sh || true; fi

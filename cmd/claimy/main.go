@@ -2,19 +2,21 @@
 package main
 
 import (
-	"context"
 	_ "time/tzdata"
 
+	"github.com/beeemT/claimy/internal/api"
+	"github.com/beeemT/claimy/internal/application"
 	"github.com/gosoline-project/httpserver"
-	"github.com/justtrackio/gosoline/pkg/cfg"
-	"github.com/justtrackio/gosoline/pkg/log"
 )
 
 func main() {
-	httpserver.RunDefaultServer(registerRoutes)
-}
-
-// The framework registers /health; claim routes are not declared here.
-func registerRoutes(_ context.Context, _ cfg.Config, _ log.Logger, _ *httpserver.Router) error {
-	return nil
+	httpserver.RunServers(map[string]httpserver.ServerDefinition{
+		"default": {
+			RouterFactory: application.Register,
+			Options: []httpserver.ServerOption{
+				httpserver.WithErrorMapper(api.ErrorMapper),
+				httpserver.WithErrorHandler(api.ErrorHandler),
+			},
+		},
+	}, application.Options()...)
 }

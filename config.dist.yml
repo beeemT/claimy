@@ -19,3 +19,45 @@ metric:
 httpserver:
   default:
     port: "8088"
+
+resource_lifecycles:
+  create:
+    enabled: false
+
+sqlc:
+  default:
+    driver: mysql
+    uri:
+      host: localhost
+      port: 3306
+      user: claimy
+      password: development-only
+      database: claimy
+    parameters:
+      loc: UTC
+      time_zone: "'+00:00'"
+    migrations:
+      enabled: false
+      path: build/migrations/claimy
+
+claimy:
+  mysql_version: 8.0.42
+  auth:
+    team_domain: example.com
+    rest:
+      issuer: https://accounts.google.com
+      audience: claimy-local
+      jwks_url: https://www.googleapis.com/oauth2/v3/certs
+    gitlab:
+      issuer: https://gitlab.example.com
+      audience: https://claimy.example.com
+      jwks_url: https://gitlab.example.com/oauth/discovery/keys
+    chat:
+      issuer: https://accounts.google.com
+      audience: https://claimy.example.com/v1/chat/events
+      jwks_url: https://www.googleapis.com/oauth2/v3/certs
+  chat:
+    app_identity: claimy
+    allowed_spaces:
+      - spaces/EXAMPLE
+    deadline: 25s

@@ -33,28 +33,10 @@ jobs:
       - name: Build application image
         run: docker build --pull --tag claimy:ci .
 
-      - name: Start application container
-        run: docker run --detach --name claimy-smoke --publish 127.0.0.1:18088:8088 claimy:ci
-
-      - name: Verify framework health endpoint
-        shell: bash
-        run: |
-          set -euo pipefail
-          trap 'docker rm --force claimy-smoke >/dev/null 2>&1 || true' EXIT
-
-          health_url=http://127.0.0.1:18088/health
-          for attempt in {1..30}; do
-            status="$(curl --silent --output /dev/null --write-out '%{http_code}' "$health_url" || true)"
-            if [[ "$status" == "200" ]]; then
-              echo "Framework health endpoint is healthy."
-              exit 0
-            fi
-            sleep 1
-          done
-
-          docker logs claimy-smoke
-          echo "::error::Application did not return HTTP 200 from $health_url within 30 seconds."
-          exit 1
+      - name: Exercise the application image against disposable MySQL
+        env:
+          CLAIMY_IMAGE: claimy:ci
+        run: mise exec -- go test -count=1 -tags=integration,fixtures ./test/e2e
 
   publish:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))

@@ -49,11 +49,11 @@ Keep query history for 90 days. A query may ask for the current state, a histori
 ## Repository evidence
 
 The existing `LICENSE` is MIT and remains unchanged.
-The runnable HTTP service and repository tooling now exist.
-Claim-domain behavior in the rest of this plan is not implemented yet.
+The repository implements the claim domain, MySQL persistence, authenticated REST and CI adapters, and Google Chat commands.
+`README.md` contains the current setup and operation commands.
 
 The current module pins Go 1.27.0, Gosoline 0.65.3, and `httpserver` 0.6.4.
-SQLH 0.8.0, SQLR 0.9.1, and SQLC 0.4.0 remain the selected public baseline for claim persistence.
+The implementation uses the public SQLH 0.8.0, SQLR 0.9.1, and SQLC 0.4.0 baseline.
 
 | ID | Pattern | Public source | Symbol |
 |---|---|---|---|
@@ -75,7 +75,7 @@ These references do not establish implementation of Claimy's domain rules.
 
 ## Repository setup and tooling
 
-The repository now has reproducible public setup, a runnable health endpoint, container packaging, and a GitHub Actions workflow.
+The repository has public setup, generated API models and mocks, Goose migrations, isolated MySQL tests, container packaging, and GitHub Actions.
 An ordinary clone and a worktree use the same setup without private module replacements or worktree-specific dependencies.
 See `README.md` for current commands.
 
@@ -89,36 +89,39 @@ gofumpt = "0.7.0"
 golangci-lint = "2.13.1"
 prek = "0.4.11"
 gitleaks = "8.30.1"
+mockery = "3.7.0"
+oapi-codegen = "2.4.1"
+"go:github.com/pressly/goose/v3/cmd/goose" = "3.24.3"
 ```
 
 Use stock golangci-lint v2 with `linters.default: none`, `gofumpt` as the formatter, tests enabled, build tags `integration,fixtures`, readonly module downloads, concurrency 4, and a five-minute timeout.
 Enable these built-in linters explicitly: `dogsled`, `dupword`, `errcheck`, `gocognit`, `goconst`, `gocritic`, `godox`, `govet`, `ineffassign`, `lll`, `misspell`, `nestif`, `nlreturn`, `nolintlint`, `revive`, `staticcheck`, `unused`, `usetesting`, and `whitespace`.
 Exclude `dogsled`, `goconst`, and `lll` from test files, and exclude Revive's flag-parameter rule from test code. Keep other exceptions narrow and explicit.
 Do not require an unpublished or custom linter bundle.
-Add generator tools only with real interfaces or API contracts.
-Use Mockery v3.7.0/testify mocks in per-package `mocks/` directories and oapi-codegen v2.4.1 with static OpenAPI source.
-At that point, make `go generate ./...` authoritative, add matching Go `tool` directives, and fail CI on tracked or untracked generated-file drift.
-Do not add empty generator tasks or placeholder specifications.
+Generator tools use real interfaces and API contracts.
+Mockery v3.7.0 generates testify mocks in per-package `mocks/` directories.
+oapi-codegen v2.4.1 generates typed models from static OpenAPI source.
+`go generate ./...` is authoritative. Matching Go tool directives and generated-drift checks are implemented.
 
-Add Goose v3.24.3 only with real timestamped `Up`/`Down` SQL migrations under `build/migrations/claimy/`.
-Then add `migrate-validate` and test migration up/down against disposable MySQL.
+Goose v3.24.3 validates timestamped `Up`/`Down` SQL migrations under `build/migrations/claimy/`.
+Disposable MySQL tests apply and reverse them.
 No default task may apply or roll back migrations on a shared database.
-Future integration tests require Docker and the public test harness's disposable `mysql:8.0.42` containers, deterministic fixtures, and a fixed test clock.
+Integration tests use Docker, the public disposable MySQL harness, deterministic fixtures, and a fixed test clock.
 Do not add a second MySQL CI service unless the harness requires it.
 
 | File or path | Current status |
 |---|---|
-| `cmd/claimy/main.go`, `config.dist.yml` | Runnable framework HTTP server with `/health`, port 8088, and no claim routes |
-| `mise.toml`, `scripts/` | Pinned tools and executable check tasks |
-| `go.mod`, `go.sum` | Public Go dependencies; no unused generator directives |
+| `cmd/claimy/main.go`, `config.dist.yml` | Authenticated claim, catalog, Chat, and health routes with shared database lifecycle |
+| `mise.toml`, `scripts/` | Pinned tools, generators, migration/check tasks, and real CI caller scripts |
+| `go.mod`, `go.sum` | Public dependencies and matching generator tool directives |
 | `.golangci.yml` | Stock v2 config and explicit built-in linters |
 | `prek.toml`, `.gitleaks.toml` | Formatting, lint, file checks, and secret scanning |
 | `.gitignore`, `.dockerignore` | Exclude local credentials, configuration, build output, and index artifacts |
-| `.github/workflows/ci.yml` | Public checks, container health smoke, and gated Docker Hub publishing |
+| `.github/workflows/ci.yml` | Public checks, real-image/MySQL smoke, and gated Docker Hub publishing |
 | `Dockerfile` | Public multi-stage build and nonroot static runtime |
 | `README.md` | Current contributor setup, runtime, and publishing instructions |
 | Existing `LICENSE` | Unchanged MIT license |
-| Mockery/OpenAPI generator inputs, `config.test.yml`, migrations, integration tests | Not created; add with their real behavior and inputs |
+| Generator inputs, `config.test.yml`, migrations, integration tests | Implemented with real API/interfaces, safe examples, and disposable signed/MySQL fixtures |
 
 The following Mise tasks are implemented and shared by local development and CI:
 
@@ -126,29 +129,32 @@ The following Mise tasks are implemented and shared by local development and CI:
 |---|---|
 | `setup` | `go mod download && prek install` |
 | `worktree-setup` | Depend on `setup` |
-| `version-check` | Compare Go versions in `go.mod` and `mise.toml` |
+| `version-check` | Compare Go, Mockery, oapi-codegen, and Goose module/tool versions |
 | `fmt` | `gofumpt -w .` |
 | `fmt-check` | Reject files reported by `gofumpt -l .` |
 | `vet` | `go vet ./...` |
 | `lint` | `golangci-lint run` |
 | `test` | `go test ./...` |
+| `test-integration` | `go test -tags=integration,fixtures ./...` against disposable MySQL |
+| `generate` | `go generate ./...` |
+| `generate-check` | Regenerate and reject tracked or untracked generated drift |
+| `migrate-validate` | Validate real timestamped Goose migrations without a database |
+| `migrate` | Apply migrations only with an explicit dedicated `GOOSE_DBSTRING` |
 | `secret-scan` | Redacted Gitleaks scans of all Git refs and working files |
 | `build` | Build `build/bin/claimy` |
 | `run` | `go run ./cmd/claimy` |
-| `check` | Version check, format check, vet, lint, test, secret scan, and build |
+| `check` | Version, format, vet, lint, unit/integration, generation, migration, secret, and build checks |
 
-`test-integration`, `generate`, `generate-check`, and `migrate-validate` remain future tasks, not no-op parts of the current check.
-The current executable has no domain tests; native and container HTTP smoke runs exercise its health surface.
+The image-specific test requires `CLAIMY_IMAGE` and executes the actual binary against isolated MySQL and HTTPS identity fixtures.
 
 Contributor onboarding is `mise trust`, `mise install`, `mise run setup`, then `mise run check`.
 Commit only safe example configuration and use Gitleaks defaults without copied broad allowlists.
 The workflow uses public actions pinned to commit hashes on Docker-capable Linux runners.
-Pull requests, `main` pushes, and Git-tag pushes run the same repository checks and container health smoke.
+Pull requests, `main` pushes, and Git-tag pushes run the same checks and database-backed image smoke.
 Repository permissions are `contents: read`; Docker Hub authentication uses its own token.
 There are no private pipeline includes, private base images, or automatic deployments.
-This repository CI does not change the future GitLab job-identity support in the claim API.
-The image includes the binary, safe distribution configuration, CA certificates, and embedded Berlin timezone data.
-Include migrations when they exist.
+Repository publishing CI is separate from GitLab job-identity support in the claim API.
+The image includes the binary, safe configuration, migrations, CA certificates, and embedded Berlin timezone data.
 Helm, protobuf, and GitOps tools remain conditional on real deployment or generation requirements.
 Codegraph and Git-work are optional local tools, not CI prerequisites.
 
@@ -517,50 +523,21 @@ Do not let release failure erase the deployment result.
 This lease cannot guarantee fencing after expiry or a team member's early release.
 Claimy does not replace or add production deployment approval rules.
 
-**Proposed CI caller.** This is a design example, not a live Claimy integration. Use Bash, `curl`, and `jq`.
+The implemented caller is `scripts/ci-acquire.sh`.
+`scripts/ci-release.sh` handles completion cleanup.
+`scripts/gitlab-claim-example.yml` configures the ID token and preserves the claim ID for `after_script`.
+Use Bash, `curl`, and `jq`.
 Set `CLAIMY_URL`, `CLAIMY_ID_TOKEN`, `CLAIMY_GROUP`, `CLAIMY_REQUEST_ID`, and `CLAIMY_ENVIRONMENTS`.
-For example, `CLAIMY_ENVIRONMENTS='["sandbox","prod"]'`.
+For example, use `CLAIMY_ENVIRONMENTS='["sandbox","prod"]'`.
 Omit `CLAIMY_APP` for the whole group and `CLAIMY_EXPIRES_AT` for default expiry.
 Generate and preserve one request ID before the request. Disable shell tracing.
 
-```bash
-#!/usr/bin/env bash
-set -u
-response=$(mktemp) || exit 2
-trap 'rm -f "$response"' EXIT
-payload=$(jq -cn \
-  --arg group "$CLAIMY_GROUP" \
-  --arg app "${CLAIMY_APP:-}" \
-  --arg expiry "${CLAIMY_EXPIRES_AT:-}" \
-  --arg requestId "$CLAIMY_REQUEST_ID" \
-  --argjson environments "$CLAIMY_ENVIRONMENTS" \
-  '{group:$group,environments:$environments,requestId:$requestId}
-   + (if $app == "" then {} else {app:$app} end)
-   + (if $expiry == "" then {} else {expiresAt:$expiry} end)') || exit 2
-status=$(printf 'header = "Authorization: Bearer %s"\n' "$CLAIMY_ID_TOKEN" |
-  curl --silent --show-error --config - --request POST \
-    --header 'Content-Type: application/json' --data-binary "$payload" \
-    --output "$response" --write-out '%{http_code}' \
-    "$CLAIMY_URL/v1/claims/acquire") || exit 2
-if [[ "$status" != 200 ]]; then
-  printf 'Claim request failed: HTTP %s\n' "$status" >&2
-  exit 2
-fi
-jq -e '(.acquired | type) == "boolean"
-  and (if .acquired then
-    (.claim.activeNow | type) == "boolean"
-    and (.claim.id | type) == "string" and (.claim.id | length) > 0
-  else true end)' "$response" >/dev/null || exit 2
-if jq -e '.acquired == false or .claim.activeNow == false' "$response" >/dev/null; then
-  exit 1
-fi
-jq -er '.claim.id' "$response" || exit 2
-exit 0
-```
-
-Exit 0 returns the claim ID and permits deployment. Exit 1 means busy or an inactive replay. Exit 2 means a request failure.
-Persist the successful ID for completion cleanup. Release that ID with a new mutation request ID through the release endpoint.
+Exit 0 returns the claim ID and permits deployment.
+Exit 1 means busy or an inactive replay. Exit 2 means a request failure.
+The script sends exactly one acquire request and never retries automatically.
+Release the successful claim with a new mutation request ID.
 An expired job token can make cleanup fail. Expiry remains the fallback.
+
 
 ## Google Chat commands
 
@@ -603,8 +580,8 @@ Hash the canonical user command before resolving server-derived revision or defa
 
 ## Acceptance-test scenarios
 
-These are required future tests. They were not run for this planning document.
-Run repository/domain tests against disposable MySQL and test identity fixtures, then exercise the registered HTTP and Chat routes.
+These scenarios define repository acceptance and staged rollout gates.
+Local tests use disposable MySQL and signed identity fixtures, then exercise the registered HTTP and Chat adapters.
 Concurrency tests must use independent DB connections and barriers to prove the race outcome, not just sequential behavior.
 
 | ID | Scenario | Action | Expected result |
@@ -650,58 +627,53 @@ Concurrency tests must use independent DB connections and barriers to prove the 
 
 ## Implementation sequence
 
-1. **Public repository setup and tooling.** The public Go module, safe runtime configuration, Mise checks, hooks, README, GitHub Actions, and Dockerfile now exist. Keep the MIT license unchanged. Add generator inputs, Go tool directives, Goose validation, and MySQL integration tasks only with their real behavior. Complete S31-S35 as those inputs become available; do not claim generator or domain acceptance from the health smoke.
-2. **Bootstrap and deployment contract.** The HTTP service and gated publishing workflow now exist. Add the migration runner, SQLC/SQLR wiring, claim routes, and error mapping with the domain implementation. Verify publishing scenarios S36-S38 against actual workflow runs. Define canonical slug/email normalization and typed actor/request models. Configure the DB, MySQL version, GitLab issuer/audience, Chat audience, and team Workspace/email domain. Do not add administrator roles or compliance gates. Gate: Migrations apply and reverse on disposable MySQL. Use public library APIs [E1,E2,E5,E6,E8,E10] only where applicable. Claimy owns composition and domain behavior.
-3. **Schema and transactional core.** Add the six tables and constraints above. Implement group upsert and row lock, app registration, DB operation time, current-read conflict query, and the atomic acquire/busy/idempotency transaction. Add unit tests for canonicalization and expiry calculations. Add isolated MySQL tests for S01-S14 and S24. Gate: Race tests prove same-owner multi-success, other-owner exactly-one-success, and no group/app phantom.
-4. **Claim lifecycle and temporal reads.** Implement read-only current, as-of, and future queries, release, compare-revision expiry change, immutable history versions, the 90-day cutoff, and safe retention pruning. Test S10-S20 and expiry-edit races. Gate: Old history never returns free. Current/future results stay coherent, and expired claims cannot be revived.
-5. **REST and CI identity.** Register typed acquisition/query/release/expiry handlers and read-only SQLH catalog routes. Add GitLab ID-token validation and the documented HTTP result contract. Use the documented single-operation CI caller in a test project. Test S21-S26 and S30. Gate: An authenticated team job proceeds only after an acquired and active result.
-6. **Chat adapter.** Add HTTPS Chat request verification and human-user/space checks. Add a strict slash-command parser, formatter, and idempotent dispatch to the same domain service. Test S27-S29 with a dedicated Chat test space and test identities. Gate: Do not send Chat success before DB commit. Duplicate events must not duplicate mutations.
-7. **Integrated rollout.** Run all acceptance scenarios on isolated MySQL. Smoke the deployed route with a GitLab test job and dedicated Chat test space. Start with sandbox test claims, then enable normal sandbox/prod use. All team members may manage all claims. Keep TLS and DB backups. To roll back, disable API/Chat ingress without deleting claim/history rows. Gate: Identity configuration and MySQL version match the tested deployment.
+1. **Public setup and tooling.** Public modules, safe examples, pinned tools, generators, hooks, Docker, and CI are implemented. The MIT license is unchanged.
+2. **Bootstrap and deployment contract.** Runtime initialization checks MySQL version, UTC sessions, and the six InnoDB tables. Goose applies explicit migrations. Authenticated routes share one SQLC runtime. Database shutdown follows HTTP drain.
+3. **Schema and transactional core.** Six tables, permanent group locks, operation-time acquisition, atomic environments, conflict checks, and global idempotency are implemented. Independent-pool barrier tests cover the races and rollback.
+4. **Lifecycle and temporal reads.** Release, revision-checked expiry changes, immutable versions, current/history/projection queries, and terminal-time retention are implemented. Expired claims cannot be revived.
+5. **REST and CI identity.** Generated typed requests, read-only SQLH catalogs, signed GitLab identity, and one-shot shell callers are implemented. Registered-route tests use real MySQL and signed tokens.
+6. **Chat adapter.** Service-token and human-user verification, allowed spaces, structured commands, formatting, and message idempotency are implemented. Signed Chat/MySQL tests cover duplicate delivery and cross-owner management.
+7. **Staged rollout.** Configure the actual MySQL server, issuers, audiences, team domain, and Chat space before enabling consumers. Exercise a staged GitLab job and dedicated Chat space. Keep deployment protections, TLS, and database backups.
 
 ## Verification and rollout
 
-Local verification passed: Mise checks, Prek hooks, workflow syntax validation, setup in the worktree and a disposable ordinary clone, and redacted Gitleaks detection of a disposable canary.
-Native and Linux/amd64 container runs returned HTTP 200 and `{}` from `/health`, returned 404 for an unimplemented claim route, and shut down with exit 0.
-Disposable Docker builds reproduced and then excluded local secret paths from the build context.
-These checks do not establish registry publication or completion of the claim-domain, MySQL, identity, and Chat scenarios below.
-Use the test harness's disposable `mysql:8.0.42` container, deterministic fixtures, and fixed clock; verify the supported production MySQL baseline separately before deployment.
-Run migrations and deterministic integration tests with independent connections.
-Inject commit, deadlock/retry, and unique-key races at the repository boundary.
-Run authentication tests with signed test keys, configured audiences, and team identities.
+Observed local verification:
+
+- The full `mise run check` task passes, including formatting, vet, lint, unit and MySQL integration tests, generation, migration validation, secret scans, and native build.
+
+- The native executable builds and `go vet ./...` passes.
+- Auth and domain tests pass with the race detector.
+- The MySQL scenario suite passes against disposable MySQL 8.0.42, including independent-connection barriers and actual lost-COMMIT-acknowledgement replay.
+- Registered REST routes pass signed identity, catalog isolation, invalid-input, ownership, and actual CI shell acquire/release tests.
+- Registered Chat routes pass signed event, any-member management, idempotency, busy/success reply, and projection tests.
+- CI caller tests distinguish busy/inactive from auth, transport, storage, and response-shape failures.
+- The actual `claimy:ci` image passes HTTPS-JWKS, REST, Chat, persisted MySQL history, health, and graceful-shutdown smoke.
+- Goose migration validation, module/tool version alignment, clean generation, and redacted secret scans pass.
+- Gitleaks rejects a disposable synthetic token canary.
+
+The schema permits an inactive release result whose terminal retention boundary has already elapsed before the next daily prune.
+Claim expiry has no lifetime cap. Result-retention timestamps saturate at MySQL's maximum `DATETIME(6)` without changing claim expiry.
+
+Run `mise run check` for the full contributor and CI task set.
+Run `mise exec -- prek run --all-files` for installed hooks.
+Build `claimy:ci`, then set `CLAIMY_IMAGE=claimy:ci` for the real-image integration test.
+Tests apply and reverse migrations only in disposable databases.
 Never point concurrency or failure-injection tests at a shared database.
 
-**Future domain commands/actions — not run.** Add `mise run migrate-validate` and `mise run test-integration` with migrations and integration tests. The integration task should run `go test -tags=integration,fixtures ./test/...` against harness-managed disposable MySQL. The current `mise run test` reports no test files.
-Apply and reverse migrations only in disposable test databases; no default command targets a shared DB.
-Run `mise run check` for the full contributor/CI task set.
-Verify main-push, Git-tag-push, failed-check, and pull-request publishing behavior against the configured Docker Hub test repository.
-Inspect the published image tags, OCI labels, and digest for S36-S38.
-Never use real registry credentials in local fixtures or pull-request tests.
-Then start the actual Claimy server against disposable test DB state.
-Test the registered routes, not only the domain service.
-Run a GitLab test job with an ID-token audience equal to the staged endpoint.
-Verify the acquired, busy, inactive-replay, and auth/storage-failure branches.
-Send structured commands from a dedicated Google Chat test space to the staged HTTPS endpoint.
-Verify the formatted bot response and event deduplication.
-Capture only redacted request/result metadata.
-Never log ID tokens or Chat bearer tokens.
-These domain and staged acceptance actions have not run.
-
-Before enabling consumers, verify these deployment prerequisites.
-MySQL must use InnoDB and enforce schema checks (8.0.16+).
-DB operation time must use UTC.
-The Go binary must include `Europe/Berlin` timezone data.
-The GitLab issuer and token audience must match configuration exactly.
-The GitLab version must supply the configured stable user, project, and job claims.
-Configure the team Workspace and email domain for Google and GitLab membership checks.
-Chat must use the configured public endpoint audience.
-Require an authenticated human user email.
+The local fixtures do not establish a live GitLab or Google Chat deployment.
+Production and staged configuration must supply the actual trusted issuers, exact audiences, team domain, and allowed space names.
+MySQL must use InnoDB, enforce checks, match the configured supported baseline, and provide UTC operation time.
+The binary includes Berlin timezone data.
+GitLab must supply the supported stable user, project, and job identity claims.
+Chat must provide an authenticated human email and use the public endpoint audience.
 All authenticated team members share the same claim-management permission.
-Reject callers when authentication or team membership cannot be established. Do not require administrator or compliance approval.
-Confirm email equality with the same canonicalization for both providers.
+Do not add administrator, owner-only, or compliance gates.
 
-During rollout, monitor operational errors without logging tokens or expanding claim policy.
-Review acquisition/busy/expiry/release outcomes from persisted history.
-Verify a busy response never produces a claim.
-Check that query retention and replay retention follow the specified rules.
-Enable normal team use after the isolated and staged end-to-end gates pass.
-The repository now contains application, configuration, dependency, and CI files. No database, claim, Chat, or deployment resource has been changed by the repository setup.
+Before staged enablement, run a GitLab test job and dedicated Chat-space commands against the HTTPS deployment.
+Verify acquired, busy, inactive replay, auth/storage failures, formatted replies, and event deduplication.
+Capture only redacted request/result metadata. Never log bearer tokens.
+No shared production database, Chat app, or deployment resource was changed by local tests.
+
+Publishing acceptance S36-S38 also requires current workflow-run and registry evidence.
+Successful main/tag pushes must preserve the full commit hash, exact release tag, `latest`, matching digest, and OCI labels.
+Failed checks and pull requests must not execute registry login or publishing.
