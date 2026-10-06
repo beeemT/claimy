@@ -160,8 +160,9 @@ Public workflow files and contributor docs are future requirements, not created 
 
 ### Docker Hub publishing
 
-Publish to `docker.io/<DOCKERHUB_USERNAME>/claimy` in the configured personal Docker Hub account.
-Set the repository variable `DOCKERHUB_USERNAME` and the Actions secret `DOCKERHUB_TOKEN`.
+Publish to `docker.io/beeemt/claimy` in the personal [Docker Hub repository](https://hub.docker.com/repository/docker/beeemt/claimy/general).
+Set the repository variable `DOCKERHUB_USERNAME` to `beeemt`.
+Store the Docker Hub token in the Actions secret `DOCKERHUB_TOKEN`.
 Use a Docker Hub personal access token with **Read & Write** permissions.
 Do not grant Delete or administrative access.
 The account must own the image repository or have write access to it.
@@ -181,8 +182,8 @@ Build once per publishing job and apply all requested image tags to that build.
 
 | Trigger | Published image tags | OCI image labels |
 |---|---|---|
-| Push to `main` | `<DOCKERHUB_USERNAME>/claimy:<full-commit-sha>` and `:latest` on the same image | `org.opencontainers.image.revision=<full-commit-sha>` and `org.opencontainers.image.version=<full-commit-sha>` |
-| Git-tag push, for example `v1.2.3` | `:<full-commit-sha>`, `:v1.2.3`, and `:latest` on the same image | Revision is the full commit hash. Version is the Git tag, including its leading `v`. |
+| Push to `main` | `docker.io/beeemt/claimy:<full-commit-sha>` and `docker.io/beeemt/claimy:latest` on the same image | `org.opencontainers.image.revision=<full-commit-sha>` and `org.opencontainers.image.version=<full-commit-sha>` |
+| Git-tag push, for example `v1.2.3` | `docker.io/beeemt/claimy:<full-commit-sha>`, `docker.io/beeemt/claimy:v1.2.3`, and `docker.io/beeemt/claimy:latest` on the same image | Revision is the full commit hash. Version is the Git tag, including its leading `v`. |
 | Pull request or failed checks | None | No image publication |
 
 The registry references above are Docker image **tags**.
@@ -200,7 +201,7 @@ Pass the resolved full commit hash as a raw tag instead of the default shortened
 Use these metadata inputs in the future publishing job:
 
 ```yaml
-images: docker.io/${{ vars.DOCKERHUB_USERNAME }}/claimy
+images: docker.io/beeemt/claimy
 flavor: latest=true
 tags: |
   type=raw,value=${{ steps.commit.outputs.sha }}
