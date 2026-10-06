@@ -29,6 +29,7 @@ import (
 	"github.com/beeemT/claimy/internal/auth"
 	"github.com/beeemT/claimy/internal/claims"
 	claimmysql "github.com/beeemT/claimy/internal/storage/mysql"
+	"github.com/beeemT/claimy/pkg/client"
 	"github.com/beeemT/claimy/test/support"
 	"github.com/gin-gonic/gin"
 	"github.com/gosoline-project/httpserver"
@@ -333,12 +334,12 @@ func decodeAPIResponse[T any](t *testing.T, response apiHTTPResponse) T {
 	return decoded
 }
 
-func assertAPIError(t *testing.T, response apiHTTPResponse, wantStatus int, wantCode ErrorDetailCode) {
+func assertAPIError(t *testing.T, response apiHTTPResponse, wantStatus int, wantCode client.ErrorDetailCode) {
 	t.Helper()
 	if response.status != wantStatus {
 		t.Fatalf("HTTP status = %d, want %d (body %q)", response.status, wantStatus, response.body)
 	}
-	body := decodeAPIResponse[ErrorResponse](t, response)
+	body := decodeAPIResponse[client.ErrorResponse](t, response)
 	if body.Error.Status != int32(wantStatus) || body.Error.Code != wantCode {
 		t.Fatalf("API error response = %#v, want status %d code %q", body.Error, wantStatus, wantCode)
 	}
@@ -430,17 +431,17 @@ func TestRegisteredCatalogHTTPRoutesAreReadOnlyAndGroupScoped(t *testing.T) {
 
 func assertCatalogGroupReadRoutes(t *testing.T, server *apiIntegrationServer, token string, alphaID uint64) {
 	t.Helper()
-	assertAPIError(t, server.request(t, http.MethodGet, "/v1/catalog/groups/catalog-alpha", "", nil), http.StatusUnauthorized, ErrorDetailCodeUnauthenticated)
+	assertAPIError(t, server.request(t, http.MethodGet, "/v1/catalog/groups/catalog-alpha", "", nil), http.StatusUnauthorized, client.ErrorDetailCodeUnauthenticated)
 
 	groupResponse := server.request(t, http.MethodGet, "/v1/catalog/groups/catalog-alpha", token, nil)
 	if groupResponse.status != http.StatusOK {
 		t.Fatalf("read catalog group status = %d, want 200 (body %q)", groupResponse.status, groupResponse.body)
 	}
-	group := decodeAPIResponse[CatalogGroup](t, groupResponse)
+	group := decodeAPIResponse[client.CatalogGroup](t, groupResponse)
 	if group.Id != strconv.FormatUint(alphaID, 10) || group.CanonicalName != "catalog-alpha" {
 		t.Fatalf("catalog group = %#v, want catalog-alpha ID %d", group, alphaID)
 	}
-	assertAPIError(t, server.request(t, http.MethodGet, "/v1/catalog/groups/catalog-missing", token, nil), http.StatusNotFound, ErrorDetailCodeNotFound)
+	assertAPIError(t, server.request(t, http.MethodGet, "/v1/catalog/groups/catalog-missing", token, nil), http.StatusNotFound, client.ErrorDetailCodeNotFound)
 }
 
 func assertCatalogGroupListRoutes(t *testing.T, server *apiIntegrationServer, token string) {
@@ -449,7 +450,7 @@ func assertCatalogGroupListRoutes(t *testing.T, server *apiIntegrationServer, to
 	if allGroupsResponse.status != http.StatusOK {
 		t.Fatalf("list catalog groups status = %d, want 200 (body %q)", allGroupsResponse.status, allGroupsResponse.body)
 	}
-	allGroups := decodeAPIResponse[CatalogGroupsResponse](t, allGroupsResponse)
+	allGroups := decodeAPIResponse[client.CatalogGroupsResponse](t, allGroupsResponse)
 	if allGroups.Total != 2 || len(allGroups.Results) != 2 {
 		t.Fatalf("unfiltered catalog groups = %#v, want both seeded groups", allGroups)
 	}
@@ -467,7 +468,7 @@ func assertCatalogGroupListRoutes(t *testing.T, server *apiIntegrationServer, to
 	if filteredGroupsResponse.status != http.StatusOK {
 		t.Fatalf("filtered catalog groups status = %d, want 200 (body %q)", filteredGroupsResponse.status, filteredGroupsResponse.body)
 	}
-	filteredGroups := decodeAPIResponse[CatalogGroupsResponse](t, filteredGroupsResponse)
+	filteredGroups := decodeAPIResponse[client.CatalogGroupsResponse](t, filteredGroupsResponse)
 	if filteredGroups.Total != 1 || len(filteredGroups.Results) != 1 || filteredGroups.Results[0].CanonicalName != "catalog-beta" {
 		t.Fatalf("filtered catalog groups = %#v, want only catalog-beta", filteredGroups)
 	}
@@ -481,7 +482,7 @@ func assertCatalogAppListRoutes(t *testing.T, server *apiIntegrationServer, toke
 	if filteredAppsResponse.status != http.StatusOK {
 		t.Fatalf("filtered catalog apps status = %d, want 200 (body %q)", filteredAppsResponse.status, filteredAppsResponse.body)
 	}
-	filteredApps := decodeAPIResponse[CatalogAppsResponse](t, filteredAppsResponse)
+	filteredApps := decodeAPIResponse[client.CatalogAppsResponse](t, filteredAppsResponse)
 	if filteredApps.Total != 1 || len(filteredApps.Results) != 1 || filteredApps.Results[0].CanonicalName != "api" || filteredApps.Results[0].GroupId != strconv.FormatUint(alphaID, 10) {
 		t.Fatalf("filtered catalog apps = %#v, want only catalog-alpha/api", filteredApps)
 	}
@@ -490,7 +491,7 @@ func assertCatalogAppListRoutes(t *testing.T, server *apiIntegrationServer, toke
 	if betaAppsResponse.status != http.StatusOK {
 		t.Fatalf("list catalog-beta apps status = %d, want 200 (body %q)", betaAppsResponse.status, betaAppsResponse.body)
 	}
-	betaApps := decodeAPIResponse[CatalogAppsResponse](t, betaAppsResponse)
+	betaApps := decodeAPIResponse[client.CatalogAppsResponse](t, betaAppsResponse)
 	if betaApps.Total != 2 || len(betaApps.Results) != 2 {
 		t.Fatalf("catalog-beta apps = %#v, want only its two apps", betaApps)
 	}
@@ -499,7 +500,7 @@ func assertCatalogAppListRoutes(t *testing.T, server *apiIntegrationServer, toke
 			t.Fatalf("catalog-beta app escaped group scope: %#v", app)
 		}
 	}
-	assertAPIError(t, server.request(t, http.MethodPost, "/v1/catalog/groups/catalog-missing/apps/query", token, map[string]any{}), http.StatusNotFound, ErrorDetailCodeNotFound)
+	assertAPIError(t, server.request(t, http.MethodPost, "/v1/catalog/groups/catalog-missing/apps/query", token, map[string]any{}), http.StatusNotFound, client.ErrorDetailCodeNotFound)
 }
 
 func assertCatalogWriteRoutes(t *testing.T, server *apiIntegrationServer, token string) {
@@ -546,13 +547,13 @@ func assertAPIAuthenticationFailures(t *testing.T, fixture *support.Fixture, ser
 		name   string
 		token  string
 		status int
-		code   ErrorDetailCode
+		code   client.ErrorDetailCode
 	}{
-		{name: "invalid GitLab signature", token: invalidSignature, status: http.StatusUnauthorized, code: ErrorDetailCodeUnauthenticated},
-		{name: "untrusted GitLab issuer", token: signAPIIntegrationToken(t, privateKey, invalidIssuerClaims), status: http.StatusUnauthorized, code: ErrorDetailCodeUnauthenticated},
-		{name: "wrong GitLab audience", token: signAPIIntegrationToken(t, privateKey, invalidAudienceClaims), status: http.StatusUnauthorized, code: ErrorDetailCodeUnauthenticated},
-		{name: "expired GitLab token", token: signAPIIntegrationToken(t, privateKey, expiredClaims), status: http.StatusUnauthorized, code: ErrorDetailCodeUnauthenticated},
-		{name: "non-team GitLab email", token: nonTeamToken, status: http.StatusForbidden, code: ErrorDetailCodeForbidden},
+		{name: "invalid GitLab signature", token: invalidSignature, status: http.StatusUnauthorized, code: client.ErrorDetailCodeUnauthenticated},
+		{name: "untrusted GitLab issuer", token: signAPIIntegrationToken(t, privateKey, invalidIssuerClaims), status: http.StatusUnauthorized, code: client.ErrorDetailCodeUnauthenticated},
+		{name: "wrong GitLab audience", token: signAPIIntegrationToken(t, privateKey, invalidAudienceClaims), status: http.StatusUnauthorized, code: client.ErrorDetailCodeUnauthenticated},
+		{name: "expired GitLab token", token: signAPIIntegrationToken(t, privateKey, expiredClaims), status: http.StatusUnauthorized, code: client.ErrorDetailCodeUnauthenticated},
+		{name: "non-team GitLab email", token: nonTeamToken, status: http.StatusForbidden, code: client.ErrorDetailCodeForbidden},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			response := server.request(t, http.MethodPost, "/v1/claims/acquire", test.token, map[string]any{
@@ -592,7 +593,7 @@ func acquireAPIManualOwnerClaim(t *testing.T, fixture *support.Fixture, server *
 		"requestId":    "forged-owner-request",
 		"ownerEmail":   "victim@example.test",
 	})
-	assertAPIError(t, forgedOwnerResponse, http.StatusBadRequest, ErrorDetailCodeInvalidRequest)
+	assertAPIError(t, forgedOwnerResponse, http.StatusBadRequest, client.ErrorDetailCodeInvalidRequest)
 	assertNoAPIWrites(t, fixture)
 
 	manualClaim := acquireAPIClaim(t, server, aliceToken, map[string]any{
@@ -738,12 +739,12 @@ func TestRESTQueryRequiresGroupAndExpiryRevisionRange(t *testing.T) {
 	verifier, key, _ := newAPIIntegrationVerifier(t)
 	server := newAPIIntegrationServer(t, fixture, verifier)
 	token := apiIntegrationManualToken(t, key, "boundary@example.test", "boundary-user")
-	assertAPIError(t, server.request(t, http.MethodPost, "/v1/claims/query", token, map[string]any{}), http.StatusBadRequest, ErrorDetailCodeInvalidRequest)
-	assertAPIError(t, server.request(t, http.MethodPost, "/v1/claims/query", token, map[string]any{"group": nil}), http.StatusBadRequest, ErrorDetailCodeInvalidRequest)
-	assertAPIError(t, server.request(t, http.MethodPost, "/v1/claims/query", token, map[string]any{"group": "g", "app": nil}), http.StatusBadRequest, ErrorDetailCodeInvalidRequest)
-	assertAPIError(t, server.request(t, http.MethodPost, "/v1/claims/acquire", token, map[string]any{"group": "g", "app": "", "environments": []string{"sandbox"}, "requestId": "blank-app"}), http.StatusBadRequest, ErrorDetailCodeInvalidRequest)
+	assertAPIError(t, server.request(t, http.MethodPost, "/v1/claims/query", token, map[string]any{}), http.StatusBadRequest, client.ErrorDetailCodeInvalidRequest)
+	assertAPIError(t, server.request(t, http.MethodPost, "/v1/claims/query", token, map[string]any{"group": nil}), http.StatusBadRequest, client.ErrorDetailCodeInvalidRequest)
+	assertAPIError(t, server.request(t, http.MethodPost, "/v1/claims/query", token, map[string]any{"group": "g", "app": nil}), http.StatusBadRequest, client.ErrorDetailCodeInvalidRequest)
+	assertAPIError(t, server.request(t, http.MethodPost, "/v1/claims/acquire", token, map[string]any{"group": "g", "app": "", "environments": []string{"sandbox"}, "requestId": "blank-app"}), http.StatusBadRequest, client.ErrorDetailCodeInvalidRequest)
 	for _, revision := range []int64{0, -1, 4294967296} {
-		assertAPIError(t, server.request(t, http.MethodPatch, "/v1/claims/not-a-uuid", token, map[string]any{"expiresAt": time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano), "expectedRevision": revision, "requestId": fmt.Sprintf("bad-revision-%d", revision)}), http.StatusBadRequest, ErrorDetailCodeInvalidRequest)
+		assertAPIError(t, server.request(t, http.MethodPatch, "/v1/claims/not-a-uuid", token, map[string]any{"expiresAt": time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano), "expectedRevision": revision, "requestId": fmt.Sprintf("bad-revision-%d", revision)}), http.StatusBadRequest, client.ErrorDetailCodeInvalidRequest)
 	}
 }
 

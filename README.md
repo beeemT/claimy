@@ -80,8 +80,9 @@ Do not log bearer tokens. Keep existing deployment approvals and database backup
 
 ## REST API
 
-[api/openapi.yaml](api/openapi.yaml) is the typed API source.
-The generated models are committed in `internal/api/models.gen.go`.
+[api/openapi.yaml](api/openapi.yaml) is the generated public API specification.
+Its source is `api/openapi.yaml.gotempl` and the YAML fragments under `api/`.
+The generated models and HTTP transport are committed in `pkg/client/client.gen.go`.
 Every API call requires a bearer token from a configured identity provider.
 Every mutation requires a stable `requestId`.
 
@@ -116,6 +117,56 @@ curl --fail http://localhost:8088/health
 
 A healthy process returns HTTP 200 and `{}`.
 The binary includes Berlin timezone data and handles SIGINT and SIGTERM shutdown.
+
+## API client and CLI
+
+The public Go client is `github.com/beeemT/claimy/pkg/client`.
+It returns typed responses and structured `*client.APIError` values.
+Its default HTTP timeout is 30 seconds. It does not retry mutations.
+
+```go
+api, err := client.New(serverURL, client.WithBearerToken(idToken))
+if err != nil {
+    return err
+}
+result, err := api.Acquire(ctx, client.AcquireRequest{
+    Group:        "payments",
+    Environments: []client.Environment{client.Sandbox},
+    RequestId:    "deploy-123",
+})
+```
+
+The `claimy api` commands use this client. With no arguments, `claimy` starts the server.
+Set `CLAIMY_URL` and `CLAIMY_ID_TOKEN`, or use `--url` and `--token-file`.
+Global flags must precede the command. Do not pass tokens as command-line arguments or enable shell tracing.
+`--timeout` sets a positive request timeout, such as `10s`.
+
+```sh
+claimy api --url https://claimy.example.com --token-file ./id-token acquire \
+  --group payments --app gateway --environments sandbox \
+  --request-id deploy-123 --output id
+claimy api query --group payments --environments both
+claimy api expiry --id "$CLAIM_ID" --expires-at 2026-12-31T12:00:00+01:00 \
+  --revision 1 --request-id expiry-123
+claimy api release --id "$CLAIM_ID" --request-id release-123
+claimy api catalog groups --limit 20 --offset 0
+claimy api catalog group --group payments
+claimy api catalog apps --group payments --canonical-name gateway
+```
+
+Acquisition requires an explicit stable request ID. Supported environment selections are
+`sandbox`, `prod`, `both`, and `sandbox,prod`.
+JSON is the default output. `acquire --output id` emits only the ID of an acquired, active claim.
+Acquisition exits with 0 for acquired and active, 1 for busy or an inactive replay, and 2 for an error.
+Other commands exit with 0 for success and 2 for an error.
+Errors go to standard error. Busy is not a storage, authentication, or transport failure.
+
+The same CLI is in the Docker image:
+
+```sh
+docker run --rm -e CLAIMY_URL -e CLAIMY_ID_TOKEN beeemt/claimy api query \
+  --group payments --environments both
+```
 
 ## GitLab CI caller
 
@@ -157,10 +208,10 @@ Changed intent on the same message returns a conflict.
 
 ## Checks and container smoke
 
-Mise pins Go, gofumpt, golangci-lint, Prek, Gitleaks, Mockery, oapi-codegen, and Goose.
+Mise pins Go, gofumpt, golangci-lint, Prek, Gitleaks, Mockery, gotempl, oapi-codegen, and Goose.
 Run `mise run generate` after generator input changes.
 `generate-check` rejects tracked and untracked generated drift.
-`version-check` compares Go, generator, Mockery, and Goose module/tool versions.
+`version-check` compares Go, template/code generators, Mockery, and Goose module/tool versions.
 
 ```sh
 mise run check
@@ -170,7 +221,7 @@ CLAIMY_IMAGE=claimy:ci mise exec -- go test -count=1 -tags=integration,fixtures 
 ```
 
 The image smoke starts the actual container against disposable MySQL and an HTTPS JWKS fixture with a test CA.
-It exercises signed REST and Chat requests, persisted ownership/history, the health endpoint, and graceful shutdown.
+It exercises the public client, native and container CLI, signed REST and Chat requests, persisted ownership/history, the health endpoint, storage-failure exit codes, and graceful shutdown.
 Without `CLAIMY_IMAGE`, normal integration tests skip only the image-specific test.
 The runtime image is static, nonroot, and contains the safe configuration, migrations, CA bundle, and embedded timezone data.
 It contains no shell or build tools.

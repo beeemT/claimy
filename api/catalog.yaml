@@ -1,0 +1,125 @@
+paths:
+  /v1/catalog/groups/query:
+    post:
+      operationId: listCatalogGroups
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CatalogListRequest'
+      responses:
+        '200':
+          description: Registered application groups, independent of claim rows.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogGroupsResponse'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/ServerError'}
+  /v1/catalog/groups/{groupSlug}:
+    get:
+      operationId: getCatalogGroup
+      parameters:
+        - in: path
+          name: groupSlug
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 128}
+      responses:
+        '200':
+          description: Registered application group.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogGroup'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/ServerError'}
+  /v1/catalog/groups/{groupSlug}/apps/query:
+    post:
+      operationId: listCatalogApps
+      parameters:
+        - in: path
+          name: groupSlug
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CatalogListRequest'
+      responses:
+        '200':
+          description: Registered apps in the selected group, independent of claim rows.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogAppsResponse'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/ServerError'}
+components:
+  schemas:
+    CatalogFilter:
+      type: object
+      additionalProperties: false
+      properties:
+        canonicalName:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+    CatalogPage:
+      type: object
+      additionalProperties: false
+      properties:
+        limit: {type: integer, format: int32, minimum: 0, maximum: 100}
+        offset: {type: integer, format: int32, minimum: 0}
+    CatalogListRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        filter: {$ref: '#/components/schemas/CatalogFilter'}
+        page: {$ref: '#/components/schemas/CatalogPage'}
+    CatalogGroup:
+      type: object
+      additionalProperties: false
+      required: [id, canonicalName, createdAt]
+      properties:
+        id: {type: string, pattern: '^[0-9]+$'}
+        canonicalName: {type: string, minLength: 1, maxLength: 128}
+        createdAt: {type: string, format: date-time}
+    CatalogApp:
+      type: object
+      additionalProperties: false
+      required: [id, groupId, canonicalName, createdAt]
+      properties:
+        id: {type: string, pattern: '^[0-9]+$'}
+        groupId: {type: string, pattern: '^[0-9]+$'}
+        canonicalName: {type: string, minLength: 1, maxLength: 128}
+        createdAt: {type: string, format: date-time}
+    CatalogGroupsResponse:
+      type: object
+      additionalProperties: false
+      required: [results, total]
+      properties:
+        results:
+          type: array
+          items: {$ref: '#/components/schemas/CatalogGroup'}
+        total: {type: integer, format: int64, minimum: 0}
+    CatalogAppsResponse:
+      type: object
+      additionalProperties: false
+      required: [results, total]
+      properties:
+        results:
+          type: array
+          items: {$ref: '#/components/schemas/CatalogApp'}
+        total: {type: integer, format: int64, minimum: 0}

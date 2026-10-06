@@ -6,6 +6,7 @@ prek = "0.4.11"
 gitleaks = "8.30.1"
 mockery = "3.7.0"
 oapi-codegen = "2.4.1"
+"go:github.com/justtrackio/gotempl" = "1.0.1"
 "go:github.com/pressly/goose/v3/cmd/goose" = "3.24.3"
 
 [tasks.setup]
@@ -45,7 +46,7 @@ description = "Run isolated MySQL and signed-identity acceptance tests"
 run = "go test -tags=integration,fixtures ./..."
 
 [tasks.generate]
-description = "Generate API models and interface mocks from committed sources"
+description = "Generate rendered OpenAPI spec, public client, and interface mocks"
 run = "go generate ./..."
 
 [tasks.generate-check]

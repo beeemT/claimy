@@ -1,0 +1,18 @@
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error: {$ref: '#/components/schemas/ErrorDetail'}
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required: [code, message, status]
+      properties:
+        code:
+          type: string
+          enum: [invalid_request, unauthenticated, forbidden, not_found, history_unavailable, conflict, storage_error]
+        message: {type: string}
+        status: {type: integer, format: int32, minimum: 400, maximum: 599}
