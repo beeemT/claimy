@@ -640,7 +640,7 @@ Concurrency tests must use independent DB connections and barriers to prove the 
 Observed local verification:
 
 - The full `mise run check` task passes, including formatting, vet, lint, unit and MySQL integration tests, generation, migration validation, secret scans, and native build.
-
+- The resolved Go graph contains 562 modules and no module replacements.
 - The native executable builds and `go vet ./...` passes.
 - Auth and domain tests pass with the race detector.
 - The MySQL scenario suite passes against disposable MySQL 8.0.42, including independent-connection barriers and actual lost-COMMIT-acknowledgement replay.
