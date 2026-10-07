@@ -844,7 +844,7 @@ func assertHelmCIPersistedIdentity(t *testing.T, kubeconfig, contextName, passwo
 	}
 	query := "SELECT source,gitlab_issuer,gitlab_project_id,gitlab_job_id,gitlab_user_id FROM claims WHERE id='" + claimID + "'"
 	result := kubectlSmoke(t, kubeconfig, contextName, time.Minute, nil, "exec", strings.TrimSpace(string(pod.stdout)), "--",
-		"env", "MYSQL_PWD="+password, "mysql", "-uclaimy", "-Dclaimy", "-Nse", query)
+		"env", "MYSQL_PWD="+password, "mysql", "--protocol=TCP", "--host=127.0.0.1", "--port=3306", "-uclaimy", "-Dclaimy", "-Nse", query)
 	if result.err != nil {
 		t.Fatalf("read persisted Helm GitLab CI identity: %s", helmSmokeDiagnostic(result))
 	}
