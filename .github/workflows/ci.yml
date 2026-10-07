@@ -105,7 +105,6 @@ jobs:
     needs: packages
     permissions:
       contents: write
-    environment: release
     runs-on: ubuntu-latest
     steps:
       - name: Check release secret before publication
@@ -113,7 +112,7 @@ jobs:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           if [[ -z "$TAP_TOKEN" ]]; then
-            echo "::error::HOMEBREW_TAP_TOKEN is required in the protected release environment before publication"
+            echo "::error::HOMEBREW_TAP_TOKEN is required before publication"
             exit 1
           fi
 

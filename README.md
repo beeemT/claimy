@@ -581,7 +581,7 @@ Archives use the deterministic name `claimy_<version-without-v>_<goos>_<goarch>.
 They are accompanied by `checksums.txt`.
 The builder excludes macOS resource-fork metadata from the release archives.
 The publishing job is separate.
-It uses the protected `release` environment.
+Tag releases run automatically after the checks and package builds pass.
 It checks `HOMEBREW_TAP_TOKEN` before publication.
 It publishes the GitHub release archives and checksums.
 It updates `Formula/claimy.rb` in `beeemT/homebrew-tap` from the actual archives and their observed SHA256 values.
@@ -609,15 +609,12 @@ Complete all of these steps before expecting a public Homebrew install to work:
 2. Configure the GitHub Actions secret `HOMEBREW_TAP_TOKEN`.
    Give it write access to `beeemT/homebrew-tap`.
    Do not use Docker Hub credentials for this token.
-3. Configure the GitHub Actions environment named `release`.
-   Add required reviewers in the repository settings.
-   Merely naming an environment in a workflow does not protect a job.
-4. Create and push a new stable tag in the form `v<major>.<minor>.<patch>`.
+3. Create and push a new stable tag in the form `v<major>.<minor>.<patch>`.
    Do not reuse a tag that predates the CLI.
-5. After the checks pass, approve the release job in the protected environment.
+4. After the checks and package builds pass, the workflow publishes the release and updates the tap automatically.
 
-The privileged release job must use the protected `release` environment.
-It must keep the tap token out of command arguments, remote URLs, logs, and generated files.
+No release environment or manual approval is required.
+The release job must keep the tap token out of command arguments, remote URLs, logs, and generated files.
 The workflow does not deploy the Claimy service.
 
 Configure `DOCKERHUB_TOKEN` with Docker Hub **Read & Write** permissions.
