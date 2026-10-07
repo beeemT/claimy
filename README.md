@@ -83,7 +83,7 @@ Do not log bearer tokens. Keep existing deployment approvals and database backup
 [api/openapi.yaml](api/openapi.yaml) is the generated public API specification.
 Its source is `api/openapi.yaml.gotempl` and the YAML fragments under `api/`.
 The generated models and HTTP transport are committed in `pkg/client/client.gen.go`.
-Every API call requires a bearer token from a configured identity provider.
+API calls require a bearer token, except the public browser-login configuration endpoint.
 Every mutation requires a stable `requestId`.
 
 | Method | Path | Behavior |
@@ -95,6 +95,8 @@ Every mutation requires a stable `requestId`.
 | POST | `/v1/catalog/groups/query` | List registered groups |
 | GET | `/v1/catalog/groups/{group}` | Read a registered group |
 | POST | `/v1/catalog/groups/{group}/apps/query` | List that group's registered apps |
+| GET | `/v1/auth/config` | Read public browser-login metadata; return 404 when login is disabled |
+| GET | `/v1/auth/me` | Confirm an authenticated manual REST identity; reject CI identities |
 
 Omit `app` to select a whole group. A supplied empty or null app is invalid.
 Use one or both values from `sandbox` and `prod` in `environments`.
@@ -136,27 +138,31 @@ result, err := api.Acquire(ctx, client.AcquireRequest{
 })
 ```
 
-The `claimy api` commands use this client. With no arguments, `claimy` starts the server.
-Set `CLAIMY_URL` and `CLAIMY_ID_TOKEN`, or use `--url` and `--token-file`.
+Client commands run directly under `claimy`. Use `claimy serve` to start the server.
+Bare `claimy` and unknown commands do not start the server.
+Use browser login below, or set `CLAIMY_URL` and `CLAIMY_ID_TOKEN` for noninteractive calls.
+Explicit `--token-file` overrides the environment token; the environment token overrides a saved login.
+`--url` and `CLAIMY_URL` override the saved default server.
 Global flags must precede the command. Do not pass tokens as command-line arguments or enable shell tracing.
-`--timeout` sets a positive request timeout, such as `10s`.
+`--timeout` sets a positive API timeout, such as `10s`, including credential refresh.
 
 ```sh
-claimy api --url https://claimy.example.com --token-file ./id-token acquire \
+claimy --url https://claimy.example.com --token-file ./id-token acquire \
   --group payments --app gateway --environments sandbox \
   --request-id deploy-123 --output id
-claimy api query --group payments --environments both
-claimy api expiry --id "$CLAIM_ID" --expires-at 2026-12-31T12:00:00+01:00 \
+claimy --json query --group payments --environments both
+claimy expiry --id "$CLAIM_ID" --expires-at 2026-12-31T12:00:00+01:00 \
   --revision 1 --request-id expiry-123
-claimy api release --id "$CLAIM_ID" --request-id release-123
-claimy api catalog groups --limit 20 --offset 0
-claimy api catalog group --group payments
-claimy api catalog apps --group payments --canonical-name gateway
+claimy release --id "$CLAIM_ID" --request-id release-123
+claimy catalog groups --limit 20 --offset 0
+claimy catalog group --group payments
+claimy catalog apps --group payments --canonical-name gateway
 ```
 
 Acquisition requires an explicit stable request ID. Supported environment selections are
 `sandbox`, `prod`, `both`, and `sandbox,prod`.
-JSON is the default output. `acquire --output id` emits only the ID of an acquired, active claim.
+JSON is the default output. `--json` also selects it explicitly, before or after the operation.
+`acquire --output id` emits only the ID of an acquired, active claim; it cannot be combined with `--json`.
 Acquisition exits with 0 for acquired and active, 1 for busy or an inactive replay, and 2 for an error.
 Other commands exit with 0 for success and 2 for an error.
 Errors go to standard error. Busy is not a storage, authentication, or transport failure.
@@ -164,9 +170,49 @@ Errors go to standard error. Busy is not a storage, authentication, or transport
 The same CLI is in the Docker image:
 
 ```sh
-docker run --rm -e CLAIMY_URL -e CLAIMY_ID_TOKEN beeemt/claimy api query \
+docker run --rm -e CLAIMY_URL -e CLAIMY_ID_TOKEN beeemt/claimy query \
   --group payments --environments both
 ```
+
+The image defaults to `serve`; an explicit client command replaces that default.
+
+### Browser login and keychain
+
+```sh
+claimy auth login https://claimy.example.com
+claimy query --group payments --json
+claimy auth logout
+# Select another saved server explicitly:
+claimy auth logout https://claimy.example.com
+```
+
+Login opens the configured identity provider in a browser with Authorization Code + S256 PKCE.
+The callback uses a temporary loopback listener and has a five-minute deadline.
+If automatic browser opening fails, open the URL printed to standard error.
+The CLI verifies the signed ID token and confirms team access with Claimy before it saves a login.
+
+Only the refresh credential and its server/identity binding are stored in the OS credential store:
+macOS Keychain, Linux Secret Service, or Windows Credential Manager.
+The regular `claimy/config.json` file under the OS user configuration directory stores only the default server URL.
+Each authenticated command refreshes the ID token; rotating refresh credentials are saved under a per-server lock.
+Logout removes the local credential and matching default URL. It does not revoke the provider session.
+Secure-storage failures stop login or refresh. There is no plaintext fallback.
+The scratch Docker image has no browser or credential-store service; use an environment token or token file there.
+
+Browser login is disabled in the distribution configuration. To enable it:
+
+1. Register an OIDC **public client** that supports S256 PKCE and a loopback callback at
+   `http://127.0.0.1:<dynamic-port>/callback`. It must issue refresh credentials and ID tokens on refresh.
+2. Set the manual REST issuer and JWKS URL, and set `claimy.auth.rest.audience` to this client's ID.
+3. Set `claimy.auth.cli.enabled: true` and `claimy.auth.cli.client_id` to the same ID.
+4. Include `openid` and `email` in `claimy.auth.cli.scopes`. Add `offline_access` if the provider requires it.
+   Set only supported, non-secret consent options in `authorization_params`, such as `prompt`.
+
+Providers that require a client secret are not supported by this public-client flow.
+The CLI obtains these public settings from the Claimy URL; users do not need to enter the issuer or client ID.
+Production server and issuer URLs must use HTTPS. Existing GitLab and Chat authentication is unchanged.
+The native browser, macOS Keychain, and refresh path were exercised with a local signed OIDC fixture;
+a deployed provider registration remains an operator prerequisite.
 
 ## GitLab CI caller
 

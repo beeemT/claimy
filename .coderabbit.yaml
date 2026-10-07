@@ -35,7 +35,8 @@ reviews:
         may release or change expiry; record the actor without changing owner or
         scope. Preserve revision checks and immutable request-key payload matching.
         Never revive expired claims or classify auth, transport, or storage failure
-        as busy. Preserve no-argument server startup and signed Chat deduplication.
+        as busy. Preserve explicit serve startup, default container server startup,
+        root client dispatch, and signed Chat deduplication.
     - path: "pkg/client/**"
       instructions: >-
         Use the generated transport and shared wire models. Preserve bounded
@@ -50,7 +51,18 @@ reviews:
         caller-owned. Acquisition exits 0 only when acquired and active, 1 for busy
         or inactive replay, and 2 for failures. ID output is permitted only for
         active acquisition. Help must work without auth or network access. Tokens
-        come from environment or a file, not command-line token arguments.
+        come from an explicit file, environment, or a keychain-backed login, never
+        command-line token arguments. JSON is default; explicit JSON and ID output
+        must not conflict.
+    - path: "internal/login/**"
+      instructions: >-
+        Preserve public-client S256 PKCE, nonce/state checks, exact issuer and one
+        audience, and verified ID-token use rather than OAuth access tokens. Bind
+        refresh credentials to the server, issuer, client ID, and user; reject
+        changed metadata before sending a saved credential. Keep refresh rotation
+        serialized across processes. Store secrets only in the OS credential store,
+        with no plaintext fallback or token logging. Keep HTTP deadlines separate
+        from the browser wait and close callbacks/launcher processes on cancellation.
     - path: "**/*_test.go"
       instructions: >-
         Tests must prove consumer behavior, boundaries, errors, or state transitions.

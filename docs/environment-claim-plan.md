@@ -105,11 +105,21 @@ gotempl v1.0.1 renders `api/openapi.yaml` from `api/openapi.yaml.gotempl` and ne
 oapi-codegen v2.4.1 generates shared typed models and HTTP transport in `pkg/client`.
 `go generate ./...` is authoritative. Matching Go tool directives and generated-drift checks are implemented.
 `pkg/client.New` adds a bounded default timeout, bearer authentication, typed errors, and acquisition-response checks.
-The `claimy api` CLI uses this public client for claims and catalog commands.
+The root `claimy` CLI uses this public client for claims, catalog, and browser-login metadata/identity commands.
 Stable request IDs remain caller-owned; the client and CLI do not retry mutations.
 Acquisition exits with 0 for acquired and active, 1 for busy or an inactive replay, and 2 for failures.
-With no arguments, the same binary starts the server. The Docker image includes both modes.
+`claimy serve` starts the server. Bare or unknown commands cannot start it. The Docker image defaults to `serve`.
 See `README.md` for client examples, commands, authentication, and output formats.
+
+JSON remains the default output; `--json` selects it explicitly.
+`auth login URL` uses the server's public OIDC configuration, browser PKCE, and a temporary loopback callback.
+The operator must register a compatible public client and enable `claimy.auth.cli`; no client secret is stored.
+The CLI verifies the provider ID token and manual team identity before saving the refresh credential in the OS keychain.
+Subsequent commands refresh under a per-server lock and preserve rotated credentials.
+Only the default server URL is stored in regular config. Storage failures have no plaintext fallback.
+Explicit token files and CI environment tokens override saved login credentials.
+`auth logout [URL]` removes local credentials, not the provider session.
+
 
 Goose v3.24.3 validates timestamped `Up`/`Down` SQL migrations under `build/migrations/claimy/`.
 Disposable MySQL fixtures apply them. A separate lifecycle test verifies `Up` → `Down` → `Up`.
@@ -119,7 +129,7 @@ Do not add a second MySQL CI service unless the harness requires it.
 
 | File or path | Current status |
 |---|---|
-| `cmd/claimy/main.go`, `config.dist.yml` | Authenticated server routes and client-backed `claimy api` commands |
+| `cmd/claimy/main.go`, `config.dist.yml` | Authenticated server routes, explicit `serve`, and client-backed root commands |
 | `mise.toml`, `scripts/` | Pinned tools, generators, migration/check tasks, and real CI caller scripts |
 | `go.mod`, `go.sum` | Public dependencies and matching generator tool directives |
 | `.golangci.yml` | Stock v2 config and explicit built-in linters |
@@ -130,7 +140,7 @@ Do not add a second MySQL CI service unless the harness requires it.
 | `README.md` | Current contributor setup, runtime, and publishing instructions |
 | Existing `LICENSE` | Unchanged MIT license |
 | Generator inputs, `config.test.yml`, migrations, integration tests | Implemented with real API/interfaces, safe examples, and disposable signed/MySQL fixtures |
-| `api/`, `pkg/client/`, `internal/cli/` | Templated public specification, shared Go client, and API CLI |
+| `api/`, `pkg/client/`, `internal/cli/`, `internal/login/` | Templated public specification, shared Go client, root CLI, and PKCE/keychain login |
 
 The following Mise tasks are implemented and shared by local development and CI:
 
@@ -151,7 +161,7 @@ The following Mise tasks are implemented and shared by local development and CI:
 | `migrate` | Apply migrations only with an explicit dedicated `GOOSE_DBSTRING` |
 | `secret-scan` | Redacted Gitleaks scans of all Git refs and working files |
 | `build` | Build `build/bin/claimy` |
-| `run` | `go run ./cmd/claimy` |
+| `run` | `go run ./cmd/claimy serve` |
 | `check` | Version, format, vet, lint, unit/integration, generation, migration, secret, and build checks |
 
 The image-specific test requires `CLAIMY_IMAGE` and executes the actual binary against isolated MySQL and HTTPS identity fixtures.

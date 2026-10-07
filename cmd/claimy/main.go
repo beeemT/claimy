@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"os"
+	"os/signal"
 	_ "time/tzdata"
 
 	"github.com/beeemT/claimy/internal/api"
@@ -13,10 +14,18 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "api" {
-		os.Exit(cli.Run(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
-	}
+	if len(os.Args) == 2 && os.Args[1] == "serve" {
+		runServer()
 
+		return
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	status := cli.Run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	os.Exit(status)
+}
+
+func runServer() {
 	httpserver.RunServers(map[string]httpserver.ServerDefinition{
 		"default": {
 			RouterFactory: application.Register,

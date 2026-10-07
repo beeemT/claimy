@@ -179,3 +179,38 @@ func TestCatalogRejectsNullSuccess(t *testing.T) {
 		})
 	}
 }
+
+func TestLoginEndpointsRejectNullSuccess(t *testing.T) {
+	cases := []struct {
+		name string
+		call func(*API) error
+	}{
+		{
+			name: "config",
+			call: func(api *API) error {
+				_, err := api.LoginConfig(t.Context())
+
+				return err
+			},
+		},
+		{
+			name: "identity",
+			call: func(api *API) error {
+				_, err := api.Identity(t.Context())
+
+				return err
+			},
+		},
+	}
+	for _, scenario := range cases {
+		t.Run(scenario.name, func(t *testing.T) {
+			api := testAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				writeResponse(t, w, []byte(" \nnull\t"))
+			})
+			if err := scenario.call(api); err == nil {
+				t.Fatal("login endpoint accepted null as a successful response")
+			}
+		})
+	}
+}

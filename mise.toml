@@ -70,7 +70,7 @@ run = "mkdir -p build/bin && go build -o build/bin/claimy ./cmd/claimy"
 
 [tasks.run]
 description = "Run Claimy using the safe root distribution configuration"
-run = "go run ./cmd/claimy"
+run = "go run ./cmd/claimy serve"
 
 [tasks.secret-scan]
 description = "Scan available Git history and working files with redacted Gitleaks output"

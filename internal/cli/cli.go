@@ -1,4 +1,4 @@
-// Package cli implements Claimy's public API command-line client.
+// Package cli implements Claimy's public command-line client.
 package cli
 
 import (
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beeemT/claimy/internal/login"
 	"github.com/beeemT/claimy/pkg/client"
 )
 
@@ -25,12 +26,14 @@ const (
 
 type globalOptions struct {
 	url          string
+	urlSet       bool
 	tokenFile    string
 	tokenFileSet bool
 	timeout      time.Duration
+	jsonSet      bool
 }
 
-// Run executes the API CLI arguments and returns the process exit status.
+// Run executes the root CLI arguments and returns the process exit status.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	options, commandArgs, help, err := parseGlobalFlags(args, stderr)
 	if err != nil {
@@ -58,22 +61,36 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runExpiry(ctx, options, commandArgs[1:], stdout, stderr)
 	case "catalog":
 		return runCatalog(ctx, options, commandArgs[1:], stdout, stderr)
+	case "auth":
+		return runAuth(ctx, options, commandArgs[1:], stdout, stderr)
+	case "serve":
+		if len(commandArgs) == 2 && commandArgs[1] == "--help" {
+			if _, err := fmt.Fprintln(stderr, "Usage: claimy serve"); err != nil {
+				return 2
+			}
+
+			return 0
+		}
+
+		return reportInputError(stderr, errors.New("'serve' does not accept arguments"))
 	default:
-		return reportInputError(stderr, errors.New("unknown API operation"))
+		return reportInputError(stderr, errors.New("unknown command"))
 	}
 }
 
 func parseGlobalFlags(args []string, stderr io.Writer) (globalOptions, []string, bool, error) {
-	flags := flag.NewFlagSet("claimy api", flag.ContinueOnError)
-	flags.SetOutput(stderr)
+	flags := flag.NewFlagSet("claimy", flag.ContinueOnError)
+	output := &errorTrackingWriter{Writer: stderr}
+	flags.SetOutput(output)
 
 	options := globalOptions{}
-	flags.StringVar(&options.url, "url", os.Getenv(claimyURLKey), "API base URL (defaults to CLAIMY_URL)")
-	flags.StringVar(&options.tokenFile, "token-file", "", "read the bearer token from a file (overrides CLAIMY_ID_TOKEN)")
+	flags.StringVar(&options.url, "url", os.Getenv(claimyURLKey), "API base URL (defaults to CLAIMY_URL or saved login)")
+	flags.StringVar(&options.tokenFile, "token-file", "", "read the bearer token from a file (overrides other token sources)")
 	flags.Lookup("url").DefValue = ""
 	flags.DurationVar(&options.timeout, "timeout", defaultTimeout, "maximum duration for the API request")
+	flags.BoolVar(&options.jsonSet, "json", false, "use JSON output (default)")
 	flags.Usage = func() {
-		if _, err := fmt.Fprintln(stderr, "Usage: claimy api [global flags] <acquire|query|release|expiry|catalog>"); err != nil {
+		if _, err := fmt.Fprintln(output, "Usage: claimy [global flags] <acquire|query|release|expiry|catalog|auth|serve>"); err != nil {
 			return
 		}
 		flags.PrintDefaults()
@@ -81,11 +98,16 @@ func parseGlobalFlags(args []string, stderr io.Writer) (globalOptions, []string,
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
+			if output.err != nil {
+				return options, nil, false, errors.New("could not write usage")
+			}
+
 			return options, nil, true, nil
 		}
 
 		return options, nil, false, err
 	}
+	options.urlSet = flagWasSet(flags, "url")
 	options.tokenFileSet = flagWasSet(flags, "token-file")
 	if options.timeout <= 0 {
 		return options, nil, false, errors.New("--timeout must be positive")
@@ -95,28 +117,40 @@ func parseGlobalFlags(args []string, stderr io.Writer) (globalOptions, []string,
 }
 
 func writeRootUsage(stderr io.Writer) error {
-	if _, err := fmt.Fprintln(stderr, "Usage: claimy api [global flags] <acquire|query|release|expiry|catalog>"); err != nil {
+	if _, err := fmt.Fprintln(stderr, "Usage: claimy [global flags] <acquire|query|release|expiry|catalog|auth|serve>"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(stderr, "Global flags: --url, --token-file, --timeout"); err != nil {
+	if _, err := fmt.Fprintln(stderr, "Global flags: --url, --token-file, --timeout, --json"); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintln(stderr, "Use 'claimy api --help' for global options and 'claimy api <operation> --help' for operation flags.")
+	_, err := fmt.Fprintln(stderr, "Use 'claimy --help' for global options and 'claimy <operation> --help' for operation flags.")
 
 	return err
 }
 
-func (options globalOptions) newAPI() (*client.API, string, error) {
-	if strings.TrimSpace(options.url) == "" {
+func (options globalOptions) newAPI(ctx context.Context) (*client.API, string, error) {
+	server := strings.TrimSpace(options.url)
+	if server == "" && !options.urlSet {
+		var err error
+		server, err = login.DefaultURL()
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if server == "" {
 		return nil, "", errors.New("--url or CLAIMY_URL is required")
 	}
 
-	token, err := loadToken(options.tokenFile, options.tokenFileSet)
+	token, err := loadToken(ctx, options.tokenFile, options.tokenFileSet, server, options.timeout)
 	if err != nil {
 		return nil, "", err
 	}
-
-	api, err := client.New(options.url, client.WithBearerToken(token), client.WithHTTPClient(&http.Client{Timeout: options.timeout}))
+	api, err := client.New(server, client.WithBearerToken(token), client.WithHTTPClient(&http.Client{
+		Timeout: options.timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}))
 	if err != nil {
 		return nil, token, err
 	}
@@ -124,7 +158,7 @@ func (options globalOptions) newAPI() (*client.API, string, error) {
 	return api, token, nil
 }
 
-func loadToken(tokenFile string, tokenFileSet bool) (string, error) {
+func loadToken(ctx context.Context, tokenFile string, tokenFileSet bool, server string, timeout time.Duration) (string, error) {
 	if tokenFileSet {
 		tokenBytes, err := os.ReadFile(tokenFile)
 		if err != nil {
@@ -138,26 +172,24 @@ func loadToken(tokenFile string, tokenFileSet bool) (string, error) {
 		return token, nil
 	}
 
-	token := strings.TrimSpace(os.Getenv(claimyTokenKey))
-	if token == "" {
-		return "", errors.New("--token-file or CLAIMY_ID_TOKEN is required")
+	if token := strings.TrimSpace(os.Getenv(claimyTokenKey)); token != "" {
+		return token, nil
 	}
 
-	return token, nil
+	return login.Token(ctx, server, timeout)
 }
 
 func perform(ctx context.Context, options globalOptions, stderr io.Writer, operation func(context.Context, *client.API) (int, error)) int {
-	api, token, err := options.newAPI()
-	if err != nil {
-		return reportFailure(stderr, token, err)
-	}
-
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	requestContext, cancel := context.WithTimeout(ctx, options.timeout)
 	defer cancel()
 
+	api, token, err := options.newAPI(requestContext)
+	if err != nil {
+		return reportFailure(stderr, token, err)
+	}
 	status, err := operation(requestContext, api)
 	if err != nil {
 		return reportFailure(stderr, token, err)
@@ -173,14 +205,14 @@ func reportFailure(stderr io.Writer, token string, err error) int {
 		if message == "" {
 			message = "request failed"
 		}
-		if _, err := fmt.Fprintf(stderr, "claimy api: HTTP %d (%v): %s\n", apiErr.StatusCode, apiErr.Code, message); err != nil {
+		if _, err := fmt.Fprintf(stderr, "claimy: HTTP %d (%v): %s\n", apiErr.StatusCode, apiErr.Code, message); err != nil {
 			return 2
 		}
 
 		return 2
 	}
 
-	if _, writeErr := fmt.Fprintf(stderr, "claimy api: %s\n", redact(err.Error(), token)); writeErr != nil {
+	if _, writeErr := fmt.Fprintf(stderr, "claimy: %s\n", redact(err.Error(), token)); writeErr != nil {
 		return 2
 	}
 
@@ -188,7 +220,7 @@ func reportFailure(stderr io.Writer, token string, err error) int {
 }
 
 func reportInputError(stderr io.Writer, err error) int {
-	if _, writeErr := fmt.Fprintf(stderr, "claimy api: %s\n", err.Error()); writeErr != nil {
+	if _, writeErr := fmt.Fprintf(stderr, "claimy: %s\n", err.Error()); writeErr != nil {
 		return 2
 	}
 

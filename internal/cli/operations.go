@@ -12,7 +12,7 @@ import (
 const outputJSON = "json"
 
 func runAcquire(ctx context.Context, global globalOptions, args []string, stdout, stderr io.Writer) int {
-	flags := newCommandFlagSet("acquire", "claimy api [global flags] acquire --group GROUP --environments ENVIRONMENTS --request-id ID [flags]", stderr)
+	flags := newCommandFlagSet("acquire", "claimy [global flags] acquire --group GROUP --environments ENVIRONMENTS --request-id ID [flags]", stderr)
 	group := flags.String("group", "", "application group (required)")
 	app := flags.String("app", "", "application name")
 	environments := flags.String("environments", "", "comma-separated sandbox,prod or both (required)")
@@ -38,6 +38,9 @@ func runAcquire(ctx context.Context, global globalOptions, args []string, stdout
 	}
 	if *output != outputJSON && *output != "id" {
 		return reportInputError(stderr, errors.New("--output must be json or id"))
+	}
+	if *output == "id" && (global.jsonSet || flagWasSet(flags, "json")) {
+		return reportInputError(stderr, errors.New("--json cannot be combined with --output id"))
 	}
 
 	parsedEnvironments, err := parseEnvironments(*environments)
@@ -117,7 +120,7 @@ func writeAcquireResponse(response *client.AcquireResponse, stdout io.Writer, st
 }
 
 func runQuery(ctx context.Context, global globalOptions, args []string, stdout, stderr io.Writer) int {
-	flags := newCommandFlagSet("query", "claimy api [global flags] query --group GROUP [flags]", stderr)
+	flags := newCommandFlagSet("query", "claimy [global flags] query --group GROUP [flags]", stderr)
 	group := flags.String("group", "", "application group (required)")
 	app := flags.String("app", "", "application name")
 	environments := flags.String("environments", "both", "comma-separated sandbox,prod or both")
@@ -171,7 +174,7 @@ func runQuery(ctx context.Context, global globalOptions, args []string, stdout, 
 }
 
 func runRelease(ctx context.Context, global globalOptions, args []string, stdout, stderr io.Writer) int {
-	flags := newCommandFlagSet("release", "claimy api [global flags] release --id UUID --request-id ID", stderr)
+	flags := newCommandFlagSet("release", "claimy [global flags] release --id UUID --request-id ID", stderr)
 	id := flags.String("id", "", "claim UUID (required)")
 	requestID := flags.String("request-id", "", "caller-provided idempotency key (required)")
 
@@ -208,7 +211,7 @@ func runRelease(ctx context.Context, global globalOptions, args []string, stdout
 }
 
 func runExpiry(ctx context.Context, global globalOptions, args []string, stdout, stderr io.Writer) int {
-	flags := newCommandFlagSet("expiry", "claimy api [global flags] expiry --id UUID --expires-at RFC3339 --revision REVISION --request-id ID", stderr)
+	flags := newCommandFlagSet("expiry", "claimy [global flags] expiry --id UUID --expires-at RFC3339 --revision REVISION --request-id ID", stderr)
 	id := flags.String("id", "", "claim UUID (required)")
 	expiresAt := flags.String("expires-at", "", "new expiry in RFC3339 format (required)")
 	revision := flags.String("revision", "", "expected claim revision, 1..4294967295 (required)")
@@ -265,6 +268,10 @@ func runExpiry(ctx context.Context, global globalOptions, args []string, stdout,
 }
 
 func runCatalog(ctx context.Context, global globalOptions, args []string, stdout, stderr io.Writer) int {
+	for len(args) > 0 && args[0] == "--json" {
+		global.jsonSet = true
+		args = args[1:]
+	}
 	if len(args) == 0 {
 		if err := writeCatalogUsage(stderr); err != nil {
 			return reportInputError(stderr, errors.New("could not write catalog usage"))
@@ -320,7 +327,7 @@ func runCatalogGroups(ctx context.Context, global globalOptions, args []string, 
 }
 
 func runCatalogGroup(ctx context.Context, global globalOptions, args []string, stdout, stderr io.Writer) int {
-	flags := newCommandFlagSet("catalog group", "claimy api [global flags] catalog group --group GROUP", stderr)
+	flags := newCommandFlagSet("catalog group", "claimy [global flags] catalog group --group GROUP", stderr)
 	group := flags.String("group", "", "canonical application group name (required)")
 
 	help, err := parseCommandFlags(flags, args)
@@ -351,7 +358,7 @@ func runCatalogGroup(ctx context.Context, global globalOptions, args []string, s
 }
 
 func runCatalogApps(ctx context.Context, global globalOptions, args []string, stdout, stderr io.Writer) int {
-	flags := newCommandFlagSet("catalog apps", "claimy api [global flags] catalog apps --group GROUP [flags]", stderr)
+	flags := newCommandFlagSet("catalog apps", "claimy [global flags] catalog apps --group GROUP [flags]", stderr)
 	group := flags.String("group", "", "canonical application group name (required)")
 	canonicalName := flags.String("canonical-name", "", "optional canonical app name filter")
 	limit := flags.Int("limit", defaultPageLimit, "page size, 1..100")
@@ -394,7 +401,7 @@ func runCatalogApps(ctx context.Context, global globalOptions, args []string, st
 }
 
 func parseCatalogListFlags(name string, args []string, stderr io.Writer) (*string, int32, int32, bool, error) {
-	flags := newCommandFlagSet(name, "claimy api [global flags] "+name+" [flags]", stderr)
+	flags := newCommandFlagSet(name, "claimy [global flags] "+name+" [flags]", stderr)
 	canonicalName := flags.String("canonical-name", "", "optional canonical name filter")
 	limit := flags.Int("limit", defaultPageLimit, "page size, 1..100")
 	offset := flags.Int("offset", 0, "zero-based result offset")
@@ -427,10 +434,10 @@ func catalogListRequestValues(canonicalName *string, limit, offset int32) client
 }
 
 func writeCatalogUsage(stderr io.Writer) error {
-	if _, err := fmt.Fprintln(stderr, "Usage: claimy api [global flags] catalog <groups|group|apps> [flags]"); err != nil {
+	if _, err := fmt.Fprintln(stderr, "Usage: claimy [global flags] catalog <groups|group|apps> [flags]"); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintln(stderr, "Use 'claimy api catalog <groups|group|apps> --help' for catalog flags.")
+	_, err := fmt.Fprintln(stderr, "Use 'claimy catalog <groups|group|apps> --help' for catalog flags.")
 
 	return err
 }

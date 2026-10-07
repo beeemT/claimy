@@ -12,11 +12,30 @@ import (
 	"github.com/beeemT/claimy/pkg/client"
 )
 
+type errorTrackingWriter struct {
+	io.Writer
+	err error
+}
+
+func (writer *errorTrackingWriter) Write(data []byte) (int, error) {
+	n, err := writer.Writer.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	if writer.err == nil && err != nil {
+		writer.err = err
+	}
+
+	return n, err
+}
+
 func newCommandFlagSet(name, usage string, stderr io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
-	flags.SetOutput(stderr)
+	output := &errorTrackingWriter{Writer: stderr}
+	flags.SetOutput(output)
+	flags.Bool("json", false, "use JSON output (default)")
 	flags.Usage = func() {
-		if _, err := fmt.Fprintln(stderr, "Usage: "+usage); err != nil {
+		if _, err := fmt.Fprintln(output, "Usage: "+usage); err != nil {
 			return
 		}
 		flags.PrintDefaults()
@@ -28,6 +47,10 @@ func newCommandFlagSet(name, usage string, stderr io.Writer) *flag.FlagSet {
 func parseCommandFlags(flags *flag.FlagSet, args []string) (bool, error) {
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
+			if output, ok := flags.Output().(*errorTrackingWriter); ok && output.err != nil {
+				return false, errors.New("could not write usage")
+			}
+
 			return true, nil
 		}
 

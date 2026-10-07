@@ -119,7 +119,7 @@ func selectErrorPayload(status int, badRequest, unauthorized, forbidden, notFoun
 
 func knownErrorCode(code ErrorDetailCode) bool {
 	switch code {
-	case ErrorDetailCodeConflict, ErrorDetailCodeForbidden, ErrorDetailCodeHistoryUnavailable, ErrorDetailCodeInvalidRequest, ErrorDetailCodeNotFound, ErrorDetailCodeStorageError, ErrorDetailCodeUnauthenticated:
+	case ErrorDetailCodeConflict, ErrorDetailCodeForbidden, ErrorDetailCodeHistoryUnavailable, ErrorDetailCodeInvalidRequest, ErrorDetailCodeNotFound, ErrorDetailCodeStorageError, ErrorDetailCodeUnauthenticated, ErrorDetailCodeLoginDisabled:
 		return true
 	default:
 		return false
@@ -262,6 +262,36 @@ func validateMutationResponse(body []byte, response *MutationResponse, operation
 	return validateClaimActiveNow(operation+" claim", envelope.Claim)
 }
 
+func validateLoginConfigResponse(body []byte) error {
+	var envelope struct {
+		Issuer   *string   `json:"issuer"`
+		ClientID *string   `json:"clientId"`
+		Scopes   *[]string `json:"scopes"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return errors.New("client: login config response is missing required fields")
+	}
+	if envelope.Issuer == nil || envelope.ClientID == nil || envelope.Scopes == nil || len(*envelope.Scopes) == 0 {
+		return errors.New("client: login config response is missing required fields")
+	}
+	if strings.TrimSpace(*envelope.Issuer) == "" || strings.TrimSpace(*envelope.ClientID) == "" {
+		return errors.New("client: login config response is missing required fields")
+	}
+
+	return nil
+}
+
+func validateLoginIdentityResponse(body []byte) error {
+	var envelope struct {
+		Email *string `json:"email"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope.Email == nil || strings.TrimSpace(*envelope.Email) == "" {
+		return errors.New("client: login identity response is missing email")
+	}
+
+	return nil
+}
+
 // Acquire acquires the requested environments or returns a valid busy result.
 func (a *API) Acquire(ctx context.Context, request AcquireRequest) (*AcquireResponse, error) {
 	generated, err := a.generated()
@@ -356,6 +386,52 @@ func (a *API) ChangeExpiry(ctx context.Context, id string, request ExpiryRequest
 		return nil, responseBodyError("change expiry", response.HTTPResponse, response.Body)
 	}
 	if err := validateMutationResponse(response.Body, response.JSON200, "change expiry"); err != nil {
+		return nil, err
+	}
+
+	return response.JSON200, nil
+}
+
+// LoginConfig returns the public browser-login configuration.
+func (a *API) LoginConfig(ctx context.Context) (*LoginConfig, error) {
+	generated, err := a.generated()
+	if err != nil {
+		return nil, err
+	}
+	response, err := generated.GetLoginConfigWithResponse(ctx)
+	if err != nil {
+		return nil, requestFailure("login config", err)
+	}
+	if err := responseFailure(response.HTTPResponse, response.Body, selectErrorPayload(response.StatusCode(), nil, nil, nil, response.JSON404, nil, nil, response.JSON500)); err != nil {
+		return nil, err
+	}
+	if response.JSON200 == nil || bytes.Equal(bytes.TrimSpace(response.Body), []byte("null")) {
+		return nil, responseBodyError("login config", response.HTTPResponse, response.Body)
+	}
+	if err := validateLoginConfigResponse(response.Body); err != nil {
+		return nil, err
+	}
+
+	return response.JSON200, nil
+}
+
+// Identity returns the authenticated manual REST identity.
+func (a *API) Identity(ctx context.Context) (*LoginIdentity, error) {
+	generated, err := a.generated()
+	if err != nil {
+		return nil, err
+	}
+	response, err := generated.GetLoginIdentityWithResponse(ctx)
+	if err != nil {
+		return nil, requestFailure("login identity", err)
+	}
+	if err := responseFailure(response.HTTPResponse, response.Body, selectErrorPayload(response.StatusCode(), nil, response.JSON401, response.JSON403, nil, nil, nil, response.JSON500)); err != nil {
+		return nil, err
+	}
+	if response.JSON200 == nil || bytes.Equal(bytes.TrimSpace(response.Body), []byte("null")) {
+		return nil, responseBodyError("login identity", response.HTTPResponse, response.Body)
+	}
+	if err := validateLoginIdentityResponse(response.Body); err != nil {
 		return nil, err
 	}
 

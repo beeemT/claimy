@@ -13,6 +13,6 @@ components:
       properties:
         code:
           type: string
-          enum: [invalid_request, unauthenticated, forbidden, not_found, history_unavailable, conflict, storage_error]
+          enum: [invalid_request, unauthenticated, forbidden, not_found, history_unavailable, conflict, storage_error, login_disabled]
         message: {type: string}
         status: {type: integer, format: int32, minimum: 400, maximum: 599}

@@ -26,6 +26,7 @@ import (
 type service struct {
 	ops        claims.Operations
 	identities auth.Authenticator
+	login      auth.Settings
 }
 
 func wireScope(in claims.Scope) client.Scope {
@@ -167,13 +168,25 @@ func wireMutationResult(in claims.MutationResult) (client.MutationResponse, erro
 	return client.MutationResponse{Changed: in.Changed, Claim: claim}, nil
 }
 
-// Register installs explicit claim routes and read-only catalog routes. The context,
-// config and logger must be the same startup values used to provide client.
+// Register installs browser-login, explicit claim, and read-only catalog
+// routes. The context, config and logger must be the same startup values used
+// to provide client.
 func Register(ctx context.Context, config cfg.Config, logger log.Logger, router *httpserver.Router, ops claims.Operations, identities auth.Authenticator, client sqlc.Client) error {
 	if ctx == nil || router == nil || ops == nil || identities == nil || client == nil {
 		return errors.New("api: context, router, service, authenticator, and client are required")
 	}
-	h := &service{ops: ops, identities: identities}
+	var authSettings auth.Settings
+	if config != nil {
+		if err := config.UnmarshalKey("claimy.auth", &authSettings); err != nil {
+			return fmt.Errorf("api: read auth settings: %w", err)
+		}
+	}
+	if err := auth.ValidateCLISettings(authSettings); err != nil {
+		return fmt.Errorf("api: validate auth CLI settings: %w", err)
+	}
+	h := &service{ops: ops, identities: identities, login: authSettings}
+	router.GET("/v1/auth/config", h.loginConfig)
+	router.GET("/v1/auth/me", h.loginIdentity)
 	router.POST("/v1/claims/acquire", h.acquire)
 	router.POST("/v1/claims/query", h.query)
 	router.POST("/v1/claims/:id/release", h.release)
@@ -183,6 +196,37 @@ func Register(ctx context.Context, config cfg.Config, logger log.Logger, router 
 	}
 
 	return nil
+}
+
+func (s *service) loginConfig(c *gin.Context) {
+	if !s.login.CLI.Enabled {
+		writeError(c, claims.NewError(claims.LoginDisabled, "browser login is disabled"))
+
+		return
+	}
+	var params *map[string]string
+	if len(s.login.CLI.AuthorizationParams) > 0 {
+		params = &s.login.CLI.AuthorizationParams
+	}
+	writeJSON(c, http.StatusOK, client.LoginConfig{
+		Issuer:              s.login.REST.Issuer,
+		ClientId:            s.login.CLI.ClientID,
+		Scopes:              s.login.CLI.Scopes,
+		AuthorizationParams: params,
+	})
+}
+
+func (s *service) loginIdentity(c *gin.Context) {
+	actor, ok := s.actor(c)
+	if !ok {
+		return
+	}
+	if actor.Channel != claims.REST {
+		writeError(c, claims.NewError(claims.Forbidden, "manual identity required"))
+
+		return
+	}
+	writeJSON(c, http.StatusOK, client.LoginIdentity{Email: openapi_types.Email(actor.Email)})
 }
 
 func (s *service) actor(c *gin.Context) (claims.Actor, bool) {
@@ -445,7 +489,7 @@ func ErrorMapper(err error) (int, bool) {
 		return 401, true
 	case claims.Forbidden:
 		return 403, true
-	case claims.NotFound:
+	case claims.NotFound, claims.LoginDisabled:
 		return 404, true
 	case claims.HistoryUnavailable:
 		return 410, true

@@ -179,7 +179,7 @@ type Operations interface {
 // ErrorCode identifies a stable domain failure category.
 type ErrorCode string
 
-// Error codes identify the domain failure categories.
+// Error codes identify the stable domain failure categories.
 const (
 	Invalid            ErrorCode = "invalid_request"
 	Unauthenticated    ErrorCode = "unauthenticated"
@@ -188,6 +188,7 @@ const (
 	HistoryUnavailable ErrorCode = "history_unavailable"
 	ConflictError      ErrorCode = "conflict"
 	StorageError       ErrorCode = "storage_error"
+	LoginDisabled      ErrorCode = "login_disabled"
 )
 
 // Error carries a domain code, a safe message, and an optional cause.

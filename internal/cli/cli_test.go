@@ -151,6 +151,9 @@ func TestRunQueryDefaultsToBothEnvironments(t *testing.T) {
 		if request.Method != http.MethodPost || request.URL.Path != "/v1/claims/query" {
 			t.Errorf("unexpected request: %s %s", request.Method, request.URL.Path)
 		}
+		if request.Header.Get("Authorization") != "Bearer test-token" {
+			t.Errorf("environment token was not used: %q", request.Header.Get("Authorization"))
+		}
 		var body struct {
 			Group        string   `json:"group"`
 			Environments []string `json:"environments"`
@@ -175,6 +178,7 @@ func TestRunQueryDefaultsToBothEnvironments(t *testing.T) {
 		"--url", server.URL,
 		"query",
 		"--group", "backend",
+		"--json",
 	}, &stdout, &stderr)
 	if status != 0 {
 		t.Fatalf("Run() status = %d, want 0; stderr: %s", status, stderr.String())
@@ -291,6 +295,14 @@ func TestRunInputBoundariesFailBeforeHTTP(t *testing.T) {
 			args: []string{"query", "--group", "backend", "--app", ""},
 		},
 		{
+			name: "acquire JSON flag conflicts with id output before operation",
+			args: []string{"--json", "acquire", "--group", "backend", "--environments", "both", "--request-id", "cli-test", "--output", "id"},
+		},
+		{
+			name: "acquire operation JSON flag conflicts with id output",
+			args: []string{"acquire", "--group", "backend", "--environments", "both", "--request-id", "cli-test", "--output", "id", "--json"},
+		},
+		{
 			name: "nonpositive timeout",
 			args: []string{"--timeout", "0", "query", "--group", "backend"},
 		},
@@ -314,6 +326,33 @@ func TestRunInputBoundariesFailBeforeHTTP(t *testing.T) {
 	}
 }
 
+func TestRunRootFailuresNeverStartServer(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	for _, args := range [][]string{
+		nil,
+		{"api"},
+		{"unknown"},
+		{"serve", "--unexpected"},
+	} {
+		var stdout, stderr strings.Builder
+		if status := Run(context.Background(), args, &stdout, &stderr); status != 2 {
+			t.Fatalf("Run(%q) status = %d, want 2; stderr: %s", args, status, stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("Run(%q) wrote to stdout: %q", args, stdout.String())
+		}
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("root failures reached the API %d times", got)
+	}
+}
+
 func TestRunHelpDoesNotRequireAuthenticationOrNetwork(t *testing.T) {
 	t.Setenv(claimyTokenKey, "help-token-sentinel")
 	for _, args := range [][]string{
@@ -321,6 +360,10 @@ func TestRunHelpDoesNotRequireAuthenticationOrNetwork(t *testing.T) {
 		{"acquire", "--help"},
 		{"catalog", "--help"},
 		{"catalog", "group", "--help"},
+		{"auth", "--help"},
+		{"auth", "--json", "--help"},
+		{"auth", "login", "--help"},
+		{"auth", "logout", "--help"},
 	} {
 		var stdout, stderr strings.Builder
 		if status := Run(context.Background(), args, &stdout, &stderr); status != 0 {

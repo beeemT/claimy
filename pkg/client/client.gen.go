@@ -34,6 +34,7 @@ const (
 	ErrorDetailCodeForbidden          ErrorDetailCode = "forbidden"
 	ErrorDetailCodeHistoryUnavailable ErrorDetailCode = "history_unavailable"
 	ErrorDetailCodeInvalidRequest     ErrorDetailCode = "invalid_request"
+	ErrorDetailCodeLoginDisabled      ErrorDetailCode = "login_disabled"
 	ErrorDetailCodeNotFound           ErrorDetailCode = "not_found"
 	ErrorDetailCodeStorageError       ErrorDetailCode = "storage_error"
 	ErrorDetailCodeUnauthenticated    ErrorDetailCode = "unauthenticated"
@@ -164,6 +165,19 @@ type GitLabIdentity struct {
 	UserId    string `json:"userId"`
 }
 
+// LoginConfig defines model for LoginConfig.
+type LoginConfig struct {
+	AuthorizationParams *map[string]string `json:"authorizationParams,omitempty"`
+	ClientId            string             `json:"clientId"`
+	Issuer              string             `json:"issuer"`
+	Scopes              []string           `json:"scopes"`
+}
+
+// LoginIdentity defines model for LoginIdentity.
+type LoginIdentity struct {
+	Email openapi_types.Email `json:"email"`
+}
+
 // MutationRequest defines model for MutationRequest.
 type MutationRequest struct {
 	RequestId string `json:"requestId"`
@@ -213,6 +227,9 @@ type Forbidden = ErrorResponse
 
 // HistoryUnavailable defines model for HistoryUnavailable.
 type HistoryUnavailable = ErrorResponse
+
+// LoginDisabled defines model for LoginDisabled.
+type LoginDisabled = ErrorResponse
 
 // NotFound defines model for NotFound.
 type NotFound = ErrorResponse
@@ -314,6 +331,12 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// GetLoginConfig request
+	GetLoginConfig(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetLoginIdentity request
+	GetLoginIdentity(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListCatalogGroupsWithBody request with any body
 	ListCatalogGroupsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -346,6 +369,30 @@ type ClientInterface interface {
 	ReleaseClaimWithBody(ctx context.Context, id openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	ReleaseClaim(ctx context.Context, id openapi_types.UUID, body ReleaseClaimJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) GetLoginConfig(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetLoginConfigRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetLoginIdentity(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetLoginIdentityRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) ListCatalogGroupsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -502,6 +549,60 @@ func (c *Client) ReleaseClaim(ctx context.Context, id openapi_types.UUID, body R
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewGetLoginConfigRequest generates requests for GetLoginConfig
+func NewGetLoginConfigRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/auth/config")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetLoginIdentityRequest generates requests for GetLoginIdentity
+func NewGetLoginIdentityRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/auth/me")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
 // NewListCatalogGroupsRequest calls the generic ListCatalogGroups builder with application/json body
@@ -842,6 +943,12 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// GetLoginConfigWithResponse request
+	GetLoginConfigWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetLoginConfigResponse, error)
+
+	// GetLoginIdentityWithResponse request
+	GetLoginIdentityWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetLoginIdentityResponse, error)
+
 	// ListCatalogGroupsWithBodyWithResponse request with any body
 	ListCatalogGroupsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ListCatalogGroupsResponse, error)
 
@@ -874,6 +981,55 @@ type ClientWithResponsesInterface interface {
 	ReleaseClaimWithBodyWithResponse(ctx context.Context, id openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReleaseClaimResponse, error)
 
 	ReleaseClaimWithResponse(ctx context.Context, id openapi_types.UUID, body ReleaseClaimJSONRequestBody, reqEditors ...RequestEditorFn) (*ReleaseClaimResponse, error)
+}
+
+type GetLoginConfigResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *LoginConfig
+	JSON404      *LoginDisabled
+	JSON500      *ServerError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetLoginConfigResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetLoginConfigResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetLoginIdentityResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *LoginIdentity
+	JSON401      *Unauthorized
+	JSON403      *Forbidden
+	JSON500      *ServerError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetLoginIdentityResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetLoginIdentityResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
 }
 
 type ListCatalogGroupsResponse struct {
@@ -1067,6 +1223,24 @@ func (r ReleaseClaimResponse) StatusCode() int {
 	return 0
 }
 
+// GetLoginConfigWithResponse request returning *GetLoginConfigResponse
+func (c *ClientWithResponses) GetLoginConfigWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetLoginConfigResponse, error) {
+	rsp, err := c.GetLoginConfig(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetLoginConfigResponse(rsp)
+}
+
+// GetLoginIdentityWithResponse request returning *GetLoginIdentityResponse
+func (c *ClientWithResponses) GetLoginIdentityWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetLoginIdentityResponse, error) {
+	rsp, err := c.GetLoginIdentity(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetLoginIdentityResponse(rsp)
+}
+
 // ListCatalogGroupsWithBodyWithResponse request with arbitrary body returning *ListCatalogGroupsResponse
 func (c *ClientWithResponses) ListCatalogGroupsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ListCatalogGroupsResponse, error) {
 	rsp, err := c.ListCatalogGroupsWithBody(ctx, contentType, body, reqEditors...)
@@ -1176,6 +1350,93 @@ func (c *ClientWithResponses) ReleaseClaimWithResponse(ctx context.Context, id o
 		return nil, err
 	}
 	return ParseReleaseClaimResponse(rsp)
+}
+
+// ParseGetLoginConfigResponse parses an HTTP response from a GetLoginConfigWithResponse call
+func ParseGetLoginConfigResponse(rsp *http.Response) (*GetLoginConfigResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetLoginConfigResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest LoginConfig
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest LoginDisabled
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetLoginIdentityResponse parses an HTTP response from a GetLoginIdentityWithResponse call
+func ParseGetLoginIdentityResponse(rsp *http.Response) (*GetLoginIdentityResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetLoginIdentityResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest LoginIdentity
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseListCatalogGroupsResponse parses an HTTP response from a ListCatalogGroupsWithResponse call

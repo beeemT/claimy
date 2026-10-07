@@ -20,12 +20,23 @@ type IssuerSettings struct {
 	JWKSURL  string `cfg:"jwks_url"`
 }
 
-// Settings contains trusted identity providers and the Claimy team domain.
+// CLISettings configures the optional browser-login metadata exposed by Claimy.
+// It contains only public OAuth client metadata; no client secret is accepted.
+type CLISettings struct {
+	Enabled             bool              `cfg:"enabled" default:"false"`
+	ClientID            string            `cfg:"client_id"`
+	Scopes              []string          `cfg:"scopes"`
+	AuthorizationParams map[string]string `cfg:"authorization_params"`
+}
+
+// Settings contains trusted identity providers, the Claimy team domain, and
+// optional browser-login metadata.
 type Settings struct {
 	TeamDomain string         `cfg:"team_domain"`
 	REST       IssuerSettings `cfg:"rest"`
 	GitLab     IssuerSettings `cfg:"gitlab"`
 	Chat       IssuerSettings `cfg:"chat"`
+	CLI        CLISettings    `cfg:"cli"`
 }
 
 // Authenticator verifies signed tokens and establishes a team-member actor.

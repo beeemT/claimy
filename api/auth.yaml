@@ -1,0 +1,52 @@
+paths:
+  /v1/auth/config:
+    get:
+      operationId: GetLoginConfig
+      security: []
+      responses:
+        '200':
+          description: Public browser-login configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginConfig'
+        '404': {$ref: '#/components/responses/LoginDisabled'}
+        '500': {$ref: '#/components/responses/ServerError'}
+  /v1/auth/me:
+    get:
+      operationId: GetLoginIdentity
+      responses:
+        '200':
+          description: Authenticated manual REST identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginIdentity'
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/ServerError'}
+components:
+  schemas:
+    LoginConfig:
+      type: object
+      additionalProperties: false
+      required: [issuer, clientId, scopes]
+      properties:
+        issuer: {type: string, format: uri, minLength: 1, maxLength: 2048}
+        clientId: {type: string, minLength: 1, maxLength: 1024}
+        scopes:
+          type: array
+          minItems: 2
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 128}
+        authorizationParams:
+          type: object
+          additionalProperties:
+            type: string
+            maxLength: 128
+    LoginIdentity:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email: {type: string, format: email, minLength: 3, maxLength: 320}

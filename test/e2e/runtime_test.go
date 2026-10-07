@@ -88,8 +88,8 @@ func TestImageRuntimeIntegration(t *testing.T) {
 	assertGracefulShutdown(t, container)
 }
 
-// runAPICLISmoke proves that the shipped executable's public API subcommand
-// performs real signed requests against the image service.
+// runAPICLISmoke proves that the shipped executable's root API client commands
+// perform real signed requests against the image service.
 func runAPICLISmoke(t *testing.T, baseURL, containerID string, fixture *support.Fixture, jwks *testJWKS, suffix string) {
 	t.Helper()
 	actors := newAPICLISmokeActors(t, jwks, suffix)
@@ -143,7 +143,7 @@ func prepareAPICLISmokeRunners(t *testing.T, baseURL, containerID string, actors
 		if !ok {
 			t.Fatalf("native CLI token was not materialized")
 		}
-		commandArgs := append([]string{"api", "--url", baseURL, "--token-file", path}, args...)
+		commandArgs := append([]string{"--url", baseURL, "--token-file", path}, args...)
 
 		return runCLICommand(t, nil, binary, commandArgs...)
 	}
@@ -151,7 +151,7 @@ func prepareAPICLISmokeRunners(t *testing.T, baseURL, containerID string, actors
 	containerRun := func(token string, args ...string) cliCommandResult {
 		commandArgs := append([]string{
 			"exec", "-e", "CLAIMY_ID_TOKEN=" + token, containerID, "/app/claimy",
-			"api", "--url", containerURL,
+			"--url", containerURL,
 		}, args...)
 
 		return runCLICommand(t, nil, "docker", commandArgs...)

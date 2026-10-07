@@ -117,13 +117,155 @@ func validateSettings(settings Settings) (string, map[string]IssuerSettings, err
 		}
 		configuredJWKS[issuer.Issuer] = issuer.JWKSURL
 	}
-
 	restIssuers := map[string]IssuerSettings{
 		settings.REST.Issuer:   settings.REST,
 		settings.GitLab.Issuer: settings.GitLab,
 	}
 
+	if err := ValidateCLISettings(settings); err != nil {
+		return "", nil, err
+	}
+
 	return teamDomain, restIssuers, nil
+}
+
+// ValidateCLISettings validates browser-login metadata against the manual REST
+// issuer. Disabled login intentionally imposes no additional configuration
+// requirements, so existing deployments can enable it independently.
+func ValidateCLISettings(settings Settings) error {
+	if !settings.CLI.Enabled {
+		return nil
+	}
+
+	return validateEnabledCLISettings(settings)
+}
+
+func validateEnabledCLISettings(settings Settings) error {
+	if err := validateCLIIssuer(settings.REST.Issuer); err != nil {
+		return err
+	}
+	if err := validateCLIRestAudience(settings.REST.Audience); err != nil {
+		return err
+	}
+	if err := validateCLIClientID(settings.CLI.ClientID, settings.REST.Audience); err != nil {
+		return err
+	}
+	if err := validateCLIScopes(settings.CLI.Scopes); err != nil {
+		return err
+	}
+
+	return validateCLIAuthorizationParams(settings.CLI.AuthorizationParams)
+}
+
+func validateCLIIssuer(issuer string) error {
+	if err := validateHTTPSURL(issuer); err != nil || len(issuer) > 2048 {
+		return errors.New("auth CLI issuer must be an absolute HTTPS URL")
+	}
+
+	return nil
+}
+
+func validateCLIRestAudience(audience string) error {
+	if audience == "" || len(audience) > 1024 || strings.TrimSpace(audience) != audience {
+		return errors.New("auth CLI REST audience is required")
+	}
+	for _, r := range audience {
+		if r <= 0x20 || r == 0x7f {
+			return errors.New("auth CLI REST audience contains invalid characters")
+		}
+	}
+
+	return nil
+}
+
+func validateCLIClientID(clientID, audience string) error {
+	if clientID == "" || strings.TrimSpace(clientID) != clientID {
+		return errors.New("auth CLI client ID is required")
+	}
+	if len(clientID) > 1024 {
+		return errors.New("auth CLI client ID is too long")
+	}
+	if clientID != audience {
+		return errors.New("auth CLI client ID must equal the REST audience")
+	}
+
+	return nil
+}
+
+func validateCLIScopes(scopes []string) error {
+	if len(scopes) == 0 {
+		return errors.New("auth CLI scopes are required")
+	}
+	seenScopes := make(map[string]struct{}, len(scopes))
+	hasOpenID := false
+	hasEmail := false
+	for _, scope := range scopes {
+		if err := validatePublicToken(scope, "auth CLI scope"); err != nil {
+			return err
+		}
+		if _, exists := seenScopes[scope]; exists {
+			return errors.New("auth CLI scopes must not contain duplicates")
+		}
+		seenScopes[scope] = struct{}{}
+		switch scope {
+		case "openid":
+			hasOpenID = true
+		case "email":
+			hasEmail = true
+		}
+	}
+	if !hasOpenID || !hasEmail {
+		return errors.New("auth CLI scopes must include openid and email")
+	}
+
+	return nil
+}
+
+func validateCLIAuthorizationParams(params map[string]string) error {
+	if len(params) > 32 {
+		return errors.New("auth CLI authorization parameters are too numerous")
+	}
+	for name, value := range params {
+		if err := validatePublicToken(name, "auth CLI authorization parameter name"); err != nil {
+			return err
+		}
+		if err := validatePublicValue(value, "auth CLI authorization parameter value"); err != nil {
+			return err
+		}
+		switch strings.ToLower(name) {
+		case "state", "nonce", "code_challenge", "code_challenge_method", "redirect_uri", "response_type", "client_id", "scope",
+			"client_secret", "client_assertion", "client_assertion_type", "password", "code", "access_token", "refresh_token", "id_token", "token", "code_verifier":
+			return errors.New("auth CLI authorization parameters contain a protected OAuth parameter")
+		}
+	}
+
+	return nil
+}
+
+func validatePublicToken(value, label string) error {
+	if value == "" || strings.TrimSpace(value) != value || len(value) > 128 {
+		return fmt.Errorf("%s is invalid", label)
+	}
+	for _, r := range value {
+		if r <= 0x20 || r == 0x7f {
+			return fmt.Errorf("%s contains invalid characters", label)
+		}
+	}
+
+	return nil
+}
+
+func validatePublicValue(value, label string) error {
+	if value == "" || strings.TrimSpace(value) != value || len(value) > 128 {
+		return fmt.Errorf("%s is invalid", label)
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("%s contains invalid characters", label)
+		}
+	}
+
+	return nil
 }
 
 func validateIssuerSettings(label string, settings IssuerSettings) error {
