@@ -2,6 +2,8 @@ package login
 
 import (
 	"context"
+	"io"
+	"net"
 	"net/http"
 	"testing"
 )
@@ -31,17 +33,37 @@ func TestCallbackRejectsWrongPathAndStateWithoutConsumingValidCallback(t *testin
 		t.Fatal("wrong callback state was accepted")
 	}
 
+	idleConnection, err := net.Dial("tcp", callback.listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := idleConnection.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
 	response, err = client.Get("http://" + callback.listener.Addr().String() + "/callback?state=expected-state&code=good")
 	if err != nil {
 		t.Fatal(err)
 	}
-	closeCallbackResponse(t, response)
 	result, err := callback.Wait(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.code != "good" {
 		t.Fatalf("callback code = %q", result.code)
+	}
+	if err := callback.Shutdown(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeCallbackResponse(t, response)
+	if int64(len(body)) != response.ContentLength {
+		t.Fatalf("callback response: received %d bytes, expected %d", len(body), response.ContentLength)
 	}
 }
 

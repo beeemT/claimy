@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 const (
 	maxCallbackQueryBytes  = 4096
 	callbackFailureInvalid = "invalid"
+	callbackResponseBody   = "Authorization callback received. Login is being verified.\n"
 )
 
 var callbackServerTimeout = 2 * time.Second
@@ -83,12 +85,16 @@ func (callback *callbackListener) handler(expectedState, expectedIssuer string) 
 			return
 		}
 
-		callback.results <- callbackResultForQuery(query, expectedIssuer)
 		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		response.Header().Set("Content-Length", strconv.Itoa(len(callbackResponseBody)))
 		response.WriteHeader(http.StatusOK)
-		if _, err := fmt.Fprintln(response, "Authorization callback received. Login is being verified."); err != nil {
-			return
+		// A disconnected browser does not invalidate the validated callback.
+		if _, err := fmt.Fprint(response, callbackResponseBody); err == nil {
+			if flusher, ok := response.(http.Flusher); ok {
+				flusher.Flush()
+			}
 		}
+		callback.results <- callbackResultForQuery(query, expectedIssuer)
 	}
 }
 
@@ -190,11 +196,8 @@ func (callback *callbackListener) Shutdown() error {
 		ctx, cancel := context.WithTimeout(context.Background(), callbackServerTimeout)
 		defer cancel()
 		var shutdownErrors []error
-		if err := callback.server.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			shutdownErrors = append(shutdownErrors, errors.New("stop login callback server failed"))
-			if err := closeCallbackServer(callback); err != nil {
-				shutdownErrors = append(shutdownErrors, err)
-			}
+		if err := closeCallbackServer(callback); err != nil {
+			shutdownErrors = append(shutdownErrors, err)
 		}
 		if err := closeCallbackListener(callback); err != nil {
 			shutdownErrors = append(shutdownErrors, err)

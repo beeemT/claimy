@@ -298,6 +298,8 @@ claimy auth logout https://claimy.example.com
 
 Login uses Authorization Code + S256 PKCE.
 The callback uses a temporary loopback listener.
+It sends the browser response before closing the listener.
+Idle browser connections do not delay shutdown.
 It has a five-minute deadline.
 If automatic browser opening fails, open the URL printed to standard error.
 The CLI verifies the signed ID token.
