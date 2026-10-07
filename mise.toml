@@ -8,6 +8,9 @@ mockery = "3.7.0"
 oapi-codegen = "2.4.1"
 "go:github.com/justtrackio/gotempl" = "1.0.1"
 "go:github.com/pressly/goose/v3/cmd/goose" = "3.24.3"
+helm = "4.2.3"
+kind = "0.33.0"
+kubectl = "1.36.1"
 "go:github.com/rhysd/actionlint/cmd/actionlint" = "1.7.12"
 
 [tasks.setup]
@@ -54,6 +57,20 @@ run = "go generate ./..."
 description = "Regenerate and reject tracked or untracked generated-file drift"
 run = "sh scripts/check-generated.sh"
 
+
+[tasks.helm-check]
+description = "Lint, render, and package the Helm chart with safe synthetic values"
+run = "sh scripts/check-helm.sh"
+
+[tasks.helm-package]
+description = "Package the Helm chart for release artifacts"
+usage = 'arg "[version]" default="0.0.0" help="Stable release version or local snapshot"'
+run = 'sh scripts/package-helm.sh "${usage_version?}"'
+
+[tasks.helm-smoke]
+description = "Install and exercise the Helm chart in a private disposable kind cluster"
+run = ': "${CLAIMY_IMAGE:?Set CLAIMY_IMAGE to a pre-built local image}"; CLAIMY_HELM_SMOKE=1 go test -count=1 -tags=integration,fixtures ./test/e2e -run "^TestHelmChartIntegration$"'
+
 [tasks.migrate-validate]
 description = "Validate timestamped Goose migrations without connecting to a database"
 run = "goose -dir build/migrations/claimy validate"
@@ -80,9 +97,9 @@ usage = 'arg "[version]" default="0.0.0" help="Version of the archives in dist"'
 run = 'python3 scripts/generate-formula.py "${usage_version?}"'
 
 [tasks.package-local]
-description = "Build local archives and generate the Homebrew formula"
+description = "Build local archives, Helm chart, and generate the Homebrew formula"
 usage = 'arg "[version]" default="0.0.0" help="Stable release version or local snapshot"'
-run = 'mise run package "${usage_version?}" && mise run formula "${usage_version?}"'
+run = 'mise run package "${usage_version?}" && mise run helm-package "${usage_version?}" && mise run formula "${usage_version?}"'
 
 [tasks.run]
 description = "Run Claimy using the safe root distribution configuration"
@@ -98,4 +115,4 @@ run = "actionlint"
 
 [tasks.check]
 description = "Run all local and CI checks"
-run = "mise run version-check && mise run ci-lint && mise run fmt-check && mise run vet && mise run lint && mise run test && mise run test-integration && mise run generate-check && mise run migrate-validate && mise run secret-scan && mise run build"
+run = "mise run version-check && mise run ci-lint && mise run fmt-check && mise run helm-check && mise run vet && mise run lint && mise run test && mise run test-integration && mise run generate-check && mise run migrate-validate && mise run secret-scan && mise run build"

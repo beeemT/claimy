@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/beeemT/claimy/internal/chat"
 	"github.com/beeemT/claimy/internal/claims"
 	storemysql "github.com/beeemT/claimy/internal/storage/mysql"
+	"github.com/gin-gonic/gin"
 	"github.com/gosoline-project/httpserver"
 	"github.com/gosoline-project/sqlc"
 	"github.com/justtrackio/gosoline/pkg/appctx"
@@ -32,6 +35,7 @@ type Settings struct {
 // Runtime shares the initialized adapters and SQLC client.
 type Runtime struct {
 	Client     sqlc.Client
+	Database   *sql.DB
 	Store      *storemysql.Repository
 	Service    *claims.Service
 	Identities *auth.Verifier
@@ -40,6 +44,9 @@ type Runtime struct {
 
 type runtimeKey struct{}
 
+// CLAIMY_DATABASE_PASSWORD is read raw to avoid Goso interpolation of Secret values.
+const databasePasswordEnv = "CLAIMY_DATABASE_PASSWORD"
+
 // Provide initializes one runtime for the application context.
 func Provide(ctx context.Context, config cfg.Config, logger log.Logger) (*Runtime, error) {
 	return appctx.Provide(ctx, runtimeKey{}, func() (*Runtime, error) {
@@ -47,16 +54,9 @@ func Provide(ctx context.Context, config cfg.Config, logger log.Logger) (*Runtim
 		if err := config.UnmarshalKey("claimy", &settings); err != nil {
 			return nil, fmt.Errorf("read claim service settings: %w", err)
 		}
-		database, err := sqlc.ProvideDB(ctx, config, logger, "default")
+		database, client, err := provideDatabaseAndClient(ctx, config, logger)
 		if err != nil {
-			return nil, fmt.Errorf("initialize claim database: %w", err)
-		}
-		if err = verifyServer(ctx, database.SQLDB()); err != nil {
-			return nil, errors.Join(err, database.Close())
-		}
-		client, err := sqlc.ProvideClient(ctx, config, logger, "default")
-		if err != nil {
-			return nil, errors.Join(fmt.Errorf("initialize claim database: %w", err), database.Close())
+			return nil, err
 		}
 		fail := func(cause error) (*Runtime, error) {
 			return nil, errors.Join(cause, client.Close())
@@ -75,8 +75,44 @@ func Provide(ctx context.Context, config cfg.Config, logger log.Logger) (*Runtim
 			return fail(fmt.Errorf("initialize Chat adapter: %w", err))
 		}
 
-		return &Runtime{Client: client, Store: store, Service: service, Identities: identities, Chat: chatHandler}, nil
+		return &Runtime{Client: client, Database: database.SQLDB(), Store: store, Service: service, Identities: identities, Chat: chatHandler}, nil
 	})
+}
+
+func provideDatabaseAndClient(ctx context.Context, config cfg.Config, logger log.Logger) (*sqlc.DB, sqlc.Client, error) {
+	databasePassword, hasDatabasePassword := os.LookupEnv(databasePasswordEnv)
+	var (
+		database         *sqlc.DB
+		databaseSettings *sqlc.Settings
+		err              error
+	)
+	if hasDatabasePassword {
+		databaseSettings, err = sqlc.ReadSettings(config, "default")
+		if err == nil {
+			databaseSettings.Uri.Password = databasePassword
+			database, err = sqlc.ProvideDBFromSettings(ctx, logger, "default", databaseSettings)
+		}
+	} else {
+		database, err = sqlc.ProvideDB(ctx, config, logger, "default")
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("initialize claim database: %w", err)
+	}
+	if err = verifyServer(ctx, database.SQLDB()); err != nil {
+		return nil, nil, errors.Join(err, database.Close())
+	}
+
+	var client sqlc.Client
+	if hasDatabasePassword {
+		client, err = sqlc.NewClientWithSettings(ctx, config, logger, "default", databaseSettings)
+	} else {
+		client, err = sqlc.ProvideClient(ctx, config, logger, "default")
+	}
+	if err != nil {
+		return nil, nil, errors.Join(fmt.Errorf("initialize claim database: %w", err), database.Close())
+	}
+
+	return database, client, nil
 }
 
 func verifyServer(ctx context.Context, database *sql.DB) error {
@@ -131,12 +167,26 @@ func Register(ctx context.Context, config cfg.Config, logger log.Logger, router 
 	if err != nil {
 		return err
 	}
+	router.GET("/ready", ready(runtime.Database))
 	if err = api.Register(ctx, config, logger, router, runtime.Service, runtime.Identities, runtime.Client); err != nil {
 		return err
 	}
 	chat.Register(router, runtime.Chat)
 
 	return nil
+}
+
+func ready(database *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+		if err := database.PingContext(ctx); err != nil {
+			c.Status(http.StatusServiceUnavailable)
+
+			return
+		}
+		c.Status(http.StatusOK)
+	}
 }
 
 // Options keeps the database open until the HTTP application has drained.

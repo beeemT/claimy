@@ -135,12 +135,14 @@ Do not add a second MySQL CI service unless the harness requires it.
 | `.golangci.yml` | Stock v2 config and explicit built-in linters |
 | `prek.toml`, `.gitleaks.toml` | Formatting, lint, file checks, and secret scanning |
 | `.gitignore`, `.dockerignore` | Exclude local credentials, configuration, build output, and index artifacts |
-| `.github/workflows/ci.yml` | Public checks, real-image/MySQL smoke, and gated Docker Hub publishing |
-| `Dockerfile` | Public multi-stage build and nonroot static runtime |
+| `.github/workflows/ci.yml` | Public checks, real-image/MySQL and kind Helm smokes, and gated image/chart publishing |
+| `Dockerfile` | Public multi-stage build, pinned Goose, and nonroot static runtime |
 | `README.md` | Current contributor setup, runtime, and publishing instructions |
 | Existing `LICENSE` | Unchanged MIT license |
 | Generator inputs, `config.test.yml`, migrations, integration tests | Implemented with real API/interfaces, safe examples, and disposable signed/MySQL fixtures |
 | `api/`, `pkg/client/`, `internal/cli/`, `internal/login/` | Templated public specification, shared Go client, root CLI, and PKCE/keychain login |
+| `docs/authentication.md` | REST/OIDC, browser CLI, GitLab CI, and Google Chat setup |
+| `build/helm/claimy/` | External MySQL and Secret, migration hooks, readiness/liveness probes, and a ClusterIP Service |
 
 The following Mise tasks are implemented and shared by local development and CI:
 
@@ -162,21 +164,26 @@ The following Mise tasks are implemented and shared by local development and CI:
 | `secret-scan` | Redacted Gitleaks scans of all Git refs and working files |
 | `build` | Build `build/bin/claimy` |
 | `run` | `go run ./cmd/claimy serve` |
-| `check` | Version, format, vet, lint, unit/integration, generation, migration, secret, and build checks |
+| `check` | Version, CI syntax, format, Helm, vet, lint, unit/integration, generation, migration, secret, and build checks |
+| `helm-check` | Lint, render, and package the chart with safe synthetic values |
+| `helm-package` | Package the chart with an explicit release or local snapshot version |
+| `helm-smoke` | Install and upgrade against real MySQL in a disposable kind cluster; requires `CLAIMY_IMAGE` |
+| `package-local` | Build all four CLI archives, the chart archive, checksums, and Homebrew formula |
 
 The image-specific test requires `CLAIMY_IMAGE` and executes the actual binary against isolated MySQL and HTTPS identity fixtures.
-
+The opt-in Helm smoke uses a private kubeconfig and checks migration ordering, literal Secret passwords, signed native GitLab and catalog operations, retained job identity, and a verified MySQL outage and recovery.
 Contributor onboarding is `mise trust`, `mise install`, `mise run setup`, then `mise run check`.
 Commit only safe example configuration and use Gitleaks defaults without copied broad allowlists.
 The workflow uses public actions pinned to commit hashes on Docker-capable Linux runners.
-Pull requests, `main` pushes, and Git-tag pushes run the same checks and database-backed image smoke.
+Pull requests, `main` pushes, and Git-tag pushes run the same checks, database-backed image smoke, and kind Helm smoke.
 Repository permissions are `contents: read`; Docker Hub authentication uses its own token.
 There are no private pipeline includes, private base images, or automatic deployments.
 Repository publishing CI is separate from GitLab job-identity support in the claim API.
-The image includes the binary, safe configuration, migrations, CA certificates, and embedded Berlin timezone data.
-The planned Helm chart will include a ClusterIP Service for in-cluster access.
-It will not create Ingress, NetworkPolicy, or TLS resources.
-Helm is not implemented yet; protobuf and GitOps tools remain conditional on real requirements.
+The image includes the binary, Goose v3.24.3, safe configuration, migrations, CA certificates, and embedded Berlin timezone data.
+The Helm chart uses external MySQL and an existing password Secret. It runs migrations before install/upgrade and creates a ClusterIP Service for in-cluster access.
+It does not create Ingress, NetworkPolicy, or TLS resources.
+Stable tags publish the chart to the separate Docker Hub OCI repository `beeemt/claimy-chart` after image and package publication succeeds. Chart version `X.Y.Z` uses image tag `vX.Y.Z`.
+Protobuf and GitOps tools remain conditional on real requirements.
 Codegraph and Git-work are optional local tools, not CI prerequisites.
 
 ### Docker Hub publishing
@@ -460,7 +467,9 @@ Terminal history does not remain indefinitely, while long-running claims remain 
 
 ## sqlh API
 
-Use SQLH `NewCrudHandler` with `CrudDefinition` for read-only catalog list/read paths and mapping [E1,E2].
+Use SQLH `TxRunnerWithClient` and SQLR repositories for read-only catalog list/read paths and mapping.
+Inject the initialized runtime client into every catalog handler. The pinned `NewCrudHandler` factory reads ordinary connection settings again and does not accept a client override.
+When `CLAIMY_DATABASE_PASSWORD` is present, load the non-secret SQLC settings and apply the raw password before creating the shared database and client. Do not pass the Secret through configuration interpolation.
 Register only safe read/list routes for groups, apps, and catalog projections.
 Do not mount generic SQLH create, update, patch, or delete routes for claims or catalog resources.
 A generic create must not bypass the group lock, conflict check, environment atomicity, history insert, or idempotency record.

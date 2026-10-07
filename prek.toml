@@ -6,7 +6,7 @@ repo = "builtin"
 hooks = [
   { id = "check-merge-conflict", args = ["--assume-in-merge"] },
   { id = "check-toml" },
-  { id = "check-yaml", args = ["--allow-multiple-documents"] },
+  { id = "check-yaml", args = ["--allow-multiple-documents"], exclude = "^build/helm/claimy/templates/" },
   { id = "end-of-file-fixer" },
   { id = "mixed-line-ending" },
   { id = "trailing-whitespace" },
@@ -24,4 +24,5 @@ repo = "local"
 hooks = [
   { id = "fmt-check", name = "gofumpt formatting", entry = "mise run fmt-check", language = "system", files = "\\.go$", pass_filenames = false },
   { id = "golangci-lint", name = "golangci-lint", entry = "mise run lint", language = "system", files = "\\.go$", pass_filenames = false },
+  { id = "helm-check", name = "Helm lint/render/package", entry = "mise run helm-check", language = "system", files = "^build/helm/claimy/", pass_filenames = false },
 ]

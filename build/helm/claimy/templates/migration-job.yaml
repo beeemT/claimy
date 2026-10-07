@@ -1,0 +1,77 @@
+{{- if .Values.migrations.enabled }}
+{{- $queryParts := list }}
+{{- range $key, $value := .Values.database.parameters }}
+{{- $queryParts = append $queryParts (printf "%s=%s" (urlquery $key) (urlquery (toString $value))) }}
+{{- end }}
+{{- $query := join "&" $queryParts }}
+{{- $dsn := printf "%s:$(MYSQL_PASSWORD)@tcp(%s:%d)/%s" .Values.database.user .Values.database.host (int .Values.database.port) .Values.database.name }}
+{{- if $query }}
+{{- $dsn = printf "%s?%s" $dsn $query }}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-migration" (include "claimy-chart.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "claimy-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "claimy-chart.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migration
+          image: {{ include "claimy-chart.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /app/goose
+          args:
+            - -dir
+            - /app/build/migrations/claimy
+            - up
+          env:
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret | quote }}
+                  key: {{ include "claimy-chart.passwordKey" . }}
+            - name: GOOSE_DRIVER
+              value: mysql
+            - name: GOOSE_DBSTRING
+              value: {{ $dsn | quote }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- with .Values.migrations.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.extraVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.extraVolumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.serviceAccountName }}
+      serviceAccountName: {{ . | quote }}
+      {{- end }}
+{{- end }}
