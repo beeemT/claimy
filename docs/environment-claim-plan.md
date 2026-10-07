@@ -91,6 +91,7 @@ prek = "0.4.11"
 gitleaks = "8.30.1"
 mockery = "3.7.0"
 oapi-codegen = "2.4.1"
+"go:github.com/justtrackio/gotempl" = "1.0.1"
 "go:github.com/pressly/goose/v3/cmd/goose" = "3.24.3"
 ```
 
@@ -100,8 +101,25 @@ Exclude `dogsled`, `goconst`, and `lll` from test files, and exclude Revive's fl
 Do not require an unpublished or custom linter bundle.
 Generator tools use real interfaces and API contracts.
 Mockery v3.7.0 generates testify mocks in per-package `mocks/` directories.
-oapi-codegen v2.4.1 generates typed models from static OpenAPI source.
+gotempl v1.0.1 renders `api/openapi.yaml` from `api/openapi.yaml.gotempl` and neutral YAML fragments.
+oapi-codegen v2.4.1 generates shared typed models and HTTP transport in `pkg/client`.
 `go generate ./...` is authoritative. Matching Go tool directives and generated-drift checks are implemented.
+`pkg/client.New` adds a bounded default timeout, bearer authentication, typed errors, and acquisition-response checks.
+The root `claimy` CLI uses this public client for claims, catalog, and browser-login metadata/identity commands.
+Stable request IDs remain caller-owned; the client and CLI do not retry mutations.
+Acquisition exits with 0 for acquired and active, 1 for busy or an inactive replay, and 2 for failures.
+`claimy serve` starts the server. Bare or unknown commands cannot start it. The Docker image defaults to `serve`.
+See `README.md` for client examples, commands, authentication, and output formats.
+
+JSON remains the default output; `--json` selects it explicitly.
+`auth login URL` uses the server's public OIDC configuration, browser PKCE, and a temporary loopback callback.
+The operator must register a compatible public client and enable `claimy.auth.cli`; no client secret is stored.
+The CLI verifies the provider ID token and manual team identity before saving the refresh credential in the OS keychain.
+Subsequent commands refresh under a per-server lock and preserve rotated credentials.
+Only the default server URL is stored in regular config. Storage failures have no plaintext fallback.
+Explicit token files and CI environment tokens override saved login credentials.
+`auth logout [URL]` removes local credentials, not the provider session.
+
 
 Goose v3.24.3 validates timestamped `Up`/`Down` SQL migrations under `build/migrations/claimy/`.
 Disposable MySQL fixtures apply them. A separate lifecycle test verifies `Up` → `Down` → `Up`.
@@ -111,7 +129,7 @@ Do not add a second MySQL CI service unless the harness requires it.
 
 | File or path | Current status |
 |---|---|
-| `cmd/claimy/main.go`, `config.dist.yml` | Authenticated claim, catalog, Chat, and health routes with shared database lifecycle |
+| `cmd/claimy/main.go`, `config.dist.yml` | Authenticated server routes, explicit `serve`, and client-backed root commands |
 | `mise.toml`, `scripts/` | Pinned tools, generators, migration/check tasks, and real CI caller scripts |
 | `go.mod`, `go.sum` | Public dependencies and matching generator tool directives |
 | `.golangci.yml` | Stock v2 config and explicit built-in linters |
@@ -122,6 +140,7 @@ Do not add a second MySQL CI service unless the harness requires it.
 | `README.md` | Current contributor setup, runtime, and publishing instructions |
 | Existing `LICENSE` | Unchanged MIT license |
 | Generator inputs, `config.test.yml`, migrations, integration tests | Implemented with real API/interfaces, safe examples, and disposable signed/MySQL fixtures |
+| `api/`, `pkg/client/`, `internal/cli/`, `internal/login/` | Templated public specification, shared Go client, root CLI, and PKCE/keychain login |
 
 The following Mise tasks are implemented and shared by local development and CI:
 
@@ -129,7 +148,7 @@ The following Mise tasks are implemented and shared by local development and CI:
 |---|---|
 | `setup` | `go mod download && prek install` |
 | `worktree-setup` | Depend on `setup` |
-| `version-check` | Compare Go, Mockery, oapi-codegen, and Goose module/tool versions |
+| `version-check` | Compare Go, Mockery, gotempl, oapi-codegen, and Goose module/tool versions |
 | `fmt` | `gofumpt -w .` |
 | `fmt-check` | Reject files reported by `gofumpt -l .` |
 | `vet` | `go vet ./...` |
@@ -142,7 +161,7 @@ The following Mise tasks are implemented and shared by local development and CI:
 | `migrate` | Apply migrations only with an explicit dedicated `GOOSE_DBSTRING` |
 | `secret-scan` | Redacted Gitleaks scans of all Git refs and working files |
 | `build` | Build `build/bin/claimy` |
-| `run` | `go run ./cmd/claimy` |
+| `run` | `go run ./cmd/claimy serve` |
 | `check` | Version, format, vet, lint, unit/integration, generation, migration, secret, and build checks |
 
 The image-specific test requires `CLAIMY_IMAGE` and executes the actual binary against isolated MySQL and HTTPS identity fixtures.
@@ -617,7 +636,7 @@ Concurrency tests must use independent DB connections and barriers to prove the 
 | S29 | End-to-end registered-route smoke | Against disposable MySQL, exercise the registered HTTP route from a CI shell caller and a Chat test-space event; render the bot's actual busy/success response | Auth, persistence, CI branching, deduplication, and bot formatting work through the real adapters; cleanup leaves no shared production data. |
 | S30 | CI distinguishes busy from failures | Return busy, then separately inject auth, network, and DB failures in the caller smoke | Busy exits nonzero without deployment; auth/network/storage failures are reported as failures, never parsed as busy or false. |
 | S31 | Public clone and worktree bootstrap | From a clean clone and a separate worktree without private credentials, run `mise trust`, `mise install`, and `mise run setup` | Both use the same public module graph and setup successfully; no private replacement or worktree-specific setup is required. |
-| S32 | Tool versions agree | Compare the Go directive, generator module versions, and Mise-pinned tool versions | `go.mod` Go version matches Mise; Mockery and oapi-codegen tool directives resolve to module versions matching Mise; local and CI resolve the same Goose CLI. |
+| S32 | Tool versions agree | Compare the Go directive, generator module versions, and Mise-pinned tool versions | `go.mod` Go version matches Mise; Mockery, gotempl, and oapi-codegen tool directives resolve to module versions matching Mise; local and CI resolve the same Goose CLI. |
 | S33 | Generated drift is rejected | In an isolated checkout, change an OpenAPI or mock generator input without updating its outputs, then separately add an untracked generated output and run `generate-check` | Both forms of drift fail; a clean `go generate ./...` leaves generated outputs unchanged. |
 | S34 | Hooks and secret scanning work | Install hooks from a clean clone; run `prek run --all-files` and `mise run secret-scan` on safe examples and a disposable canary-secret fixture | Hooks and scans run as configured, reject the canary, and do not require broad allowlists or real credentials. |
 | S35 | Public dependency, config, and CI boundary | Inspect the Go dependency graph and sample config, then exercise pull-request CI metadata | Dependencies and configs use public sources and dummy values with no private replacements, nonpublic hosts, or committed secrets. CI uses public actions/runners with read-only permissions. Pull requests never publish or deploy. |
@@ -640,8 +659,9 @@ Concurrency tests must use independent DB connections and barriers to prove the 
 Observed local verification:
 
 - The full `mise run check` task passes, including formatting, vet, lint, unit and MySQL integration tests, generation, migration validation, secret scans, and native build.
-- The resolved Go graph contains 562 modules and no module replacements.
-- A clean clone and separate worktree both pass trust, tool installation, and setup with isolated homes and fresh module caches. All 561 external modules download through the public proxy with authentication disabled. Both layouts resolve the same 3,405 graph edges and install executable Prek hooks.
+- At the original server release (`94bcf10`), the resolved Go graph contained 562 modules and no module replacements.
+- That release passed clean-clone and separate-worktree setup with isolated homes and fresh module caches. All 561 external modules downloaded through the public proxy with authentication disabled. Both layouts resolved the same 3,405 graph edges and installed executable Prek hooks.
+- The client/CLI module graph contains 580 modules. `go mod download` succeeds with a fresh cache, the public proxy, checksum verification, and authentication disabled.
 - The native executable builds and `go vet ./...` passes.
 - Auth and domain tests pass with the race detector.
 - The MySQL scenario suite passes against disposable MySQL 8.0.42, including independent-connection barriers and actual lost-COMMIT-acknowledgement replay.
@@ -649,9 +669,11 @@ Observed local verification:
 - Registered Chat routes pass signed event, any-member management, idempotency, busy/success reply, and projection tests.
 - CI caller tests distinguish busy/inactive from auth, transport, storage, and response-shape failures.
 - The actual `claimy:ci` image passes HTTPS-JWKS, REST, Chat, persisted MySQL history, health, and graceful-shutdown smoke.
+- The built client/CLI image passes the public Go client's seven methods and native/container CLI claim and catalog flows against signed HTTPS-JWKS/MySQL fixtures. Busy and inactive replay exit 1 and withhold ID output. A real missing-table storage failure returns HTTP 500; the public client reports an error, and both the CLI and existing CI caller exit 2 without partial rows.
 - Goose migration validation, module/tool version alignment, clean generation, and redacted secret scans pass.
 - Gitleaks rejects a disposable synthetic token canary.
 - In an isolated clone, `generate-check` rejects both changed OpenAPI inputs and untracked generated outputs.
+- For the templated specification, an isolated source-fragment change produces drift in both `api/openapi.yaml` and `pkg/client/client.gen.go`; `generate-check` rejects it. An untracked public generated client is also rejected.
 - Clean-clone hooks and secret scans pass. The installed pre-commit hook and directory scan both reject a synthetic high-entropy token canary.
 
 One local release-image smoke returned HTTP 500. Its cause is unclassified because the old harness discarded the response body and container logs.

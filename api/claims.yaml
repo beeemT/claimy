@@ -1,0 +1,228 @@
+paths:
+  /v1/claims/acquire:
+    post:
+      operationId: acquireClaim
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcquireRequest'
+      responses:
+        '200':
+          description: Acquired claim or a busy result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcquireResponse'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/ConflictResponse'}
+        '500': {$ref: '#/components/responses/ServerError'}
+  /v1/claims/query:
+    post:
+      operationId: queryClaims
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+      responses:
+        '200':
+          description: Current, retained historical, or projected claim query.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResponse'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '410': {$ref: '#/components/responses/HistoryUnavailable'}
+        '500': {$ref: '#/components/responses/ServerError'}
+  /v1/claims/{id}/release:
+    post:
+      operationId: releaseClaim
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MutationRequest'
+      responses:
+        '200':
+          description: Claim released or already inactive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResponse'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ConflictResponse'}
+        '500': {$ref: '#/components/responses/ServerError'}
+  /v1/claims/{id}:
+    patch:
+      operationId: changeClaimExpiry
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpiryRequest'
+      responses:
+        '200':
+          description: Expiry changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResponse'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/ConflictResponse'}
+        '500': {$ref: '#/components/responses/ServerError'}
+components:
+  schemas:
+    Environment:
+      type: string
+      enum: [sandbox, prod]
+    Source:
+      type: string
+      enum: [manual, ci]
+    Scope:
+      type: object
+      additionalProperties: false
+      required: [group]
+      properties:
+        group: {type: string, minLength: 1, maxLength: 128}
+        app: {type: string, minLength: 1, maxLength: 128}
+    GitLabIdentity:
+      type: object
+      additionalProperties: false
+      required: [issuer, projectId, jobId, userId]
+      properties:
+        issuer: {type: string, minLength: 1, maxLength: 255}
+        projectId: {type: string, minLength: 1, maxLength: 128}
+        jobId: {type: string, minLength: 1, maxLength: 128}
+        userId: {type: string, minLength: 1, maxLength: 128}
+    Claim:
+      type: object
+      additionalProperties: false
+      required: [id, scope, environments, ownerEmail, source, createdAt, expiresAt, revision, activeNow, inherited]
+      properties:
+        id: {type: string, format: uuid}
+        scope: {$ref: '#/components/schemas/Scope'}
+        environments:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/Environment'}
+        ownerEmail: {type: string, format: email, minLength: 3, maxLength: 320}
+        source: {$ref: '#/components/schemas/Source'}
+        gitlab: {$ref: '#/components/schemas/GitLabIdentity'}
+        createdAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time}
+        releasedAt: {type: string, format: date-time}
+        revision: {type: integer, format: int64, minimum: 1, maximum: 4294967295}
+        activeNow: {type: boolean}
+        inherited: {type: boolean}
+    Conflict:
+      type: object
+      additionalProperties: false
+      required: [id, scope, environments, ownerEmail, source, expiresAt]
+      properties:
+        id: {type: string, format: uuid}
+        scope: {$ref: '#/components/schemas/Scope'}
+        environments:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/Environment'}
+        ownerEmail: {type: string, format: email, minLength: 3, maxLength: 320}
+        source: {$ref: '#/components/schemas/Source'}
+        expiresAt: {type: string, format: date-time}
+    AcquireRequest:
+      type: object
+      additionalProperties: false
+      required: [group, environments, requestId]
+      properties:
+        group: {type: string, minLength: 1, maxLength: 128}
+        app: {type: string, minLength: 1, maxLength: 128}
+        environments:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/Environment'}
+        expiresAt: {type: string, format: date-time}
+        requestId: {type: string, minLength: 1, maxLength: 128}
+    AcquireResponse:
+      type: object
+      additionalProperties: false
+      required: [acquired]
+      properties:
+        acquired: {type: boolean}
+        claim: {$ref: '#/components/schemas/Claim'}
+        conflicts:
+          type: array
+          items: {$ref: '#/components/schemas/Conflict'}
+    QueryRequest:
+      type: object
+      additionalProperties: false
+      required: [group]
+      properties:
+        group: {type: string, minLength: 1, maxLength: 128}
+        app: {type: string, minLength: 1, maxLength: 128}
+        environments:
+          type: array
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/Environment'}
+        at: {type: string, format: date-time}
+    QueryResponse:
+      type: object
+      additionalProperties: false
+      required: [known, at, projected, free, allowedForCaller, claims]
+      properties:
+        known: {type: boolean}
+        at: {type: string, format: date-time}
+        projected: {type: boolean}
+        free: {type: boolean}
+        allowedForCaller: {type: boolean}
+        claims:
+          type: array
+          items: {$ref: '#/components/schemas/Claim'}
+    MutationRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId]
+      properties:
+        requestId: {type: string, minLength: 1, maxLength: 128}
+    ExpiryRequest:
+      type: object
+      additionalProperties: false
+      required: [expiresAt, expectedRevision, requestId]
+      properties:
+        expiresAt: {type: string, format: date-time}
+        expectedRevision: {type: integer, format: int64, minimum: 1, maximum: 4294967295}
+        requestId: {type: string, minLength: 1, maxLength: 128}
+    MutationResponse:
+      type: object
+      additionalProperties: false
+      required: [changed, claim]
+      properties:
+        changed: {type: boolean}
+        claim: {$ref: '#/components/schemas/Claim'}

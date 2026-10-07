@@ -6,31 +6,187 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/beeemT/claimy/internal/auth"
 	"github.com/beeemT/claimy/internal/claims"
+	"github.com/beeemT/claimy/pkg/client"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gosoline-project/httpserver"
 	"github.com/gosoline-project/sqlc"
 	"github.com/justtrackio/gosoline/pkg/cfg"
 	"github.com/justtrackio/gosoline/pkg/log"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 type service struct {
 	ops        claims.Operations
 	identities auth.Authenticator
+	login      auth.Settings
 }
 
-// Register installs explicit claim routes and read-only catalog routes. The context,
-// config and logger must be the same startup values used to provide client.
+func wireScope(in claims.Scope) client.Scope {
+	out := client.Scope{Group: in.Group}
+	if in.App != "" {
+		app := in.App
+		out.App = &app
+	}
+
+	return out
+}
+
+func wireGitLabIdentity(in *claims.GitLabIdentity) *client.GitLabIdentity {
+	if in == nil {
+		return nil
+	}
+
+	return &client.GitLabIdentity{
+		Issuer:    in.Issuer,
+		ProjectId: in.ProjectID,
+		JobId:     in.JobID,
+		UserId:    in.UserID,
+	}
+}
+
+func wireUUID(id string) (openapi_types.UUID, error) {
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return openapi_types.UUID{}, fmt.Errorf("invalid claim identifier: %w", err)
+	}
+
+	return parsed, nil
+}
+
+func wireClaim(in claims.Claim) (client.Claim, error) {
+	id, err := wireUUID(in.ID)
+	if err != nil {
+		return client.Claim{}, err
+	}
+	var environments []client.Environment
+	if in.Environments != nil {
+		environments = make([]client.Environment, len(in.Environments))
+		for i, environment := range in.Environments {
+			environments[i] = client.Environment(environment)
+		}
+	}
+
+	return client.Claim{
+		ActiveNow:    in.ActiveNow,
+		CreatedAt:    in.CreatedAt,
+		Environments: environments,
+		ExpiresAt:    in.ExpiresAt,
+		Gitlab:       wireGitLabIdentity(in.GitLab),
+		Id:           id,
+		Inherited:    in.Inherited,
+		OwnerEmail:   openapi_types.Email(in.OwnerEmail),
+		ReleasedAt:   in.ReleasedAt,
+		Revision:     int64(in.Revision),
+		Scope:        wireScope(in.Scope),
+		Source:       client.Source(in.Source),
+	}, nil
+}
+
+func wireConflict(in claims.Conflict) (client.Conflict, error) {
+	id, err := wireUUID(in.ID)
+	if err != nil {
+		return client.Conflict{}, err
+	}
+	var environments []client.Environment
+	if in.Environments != nil {
+		environments = make([]client.Environment, len(in.Environments))
+		for i, environment := range in.Environments {
+			environments[i] = client.Environment(environment)
+		}
+	}
+
+	return client.Conflict{
+		Environments: environments,
+		ExpiresAt:    in.ExpiresAt,
+		Id:           id,
+		OwnerEmail:   openapi_types.Email(in.OwnerEmail),
+		Scope:        wireScope(in.Scope),
+		Source:       client.Source(in.Source),
+	}, nil
+}
+
+func wireAcquireResult(in claims.AcquireResult) (client.AcquireResponse, error) {
+	out := client.AcquireResponse{Acquired: in.Acquired}
+	if in.Claim != nil {
+		claim, err := wireClaim(*in.Claim)
+		if err != nil {
+			return client.AcquireResponse{}, err
+		}
+		out.Claim = &claim
+	}
+	if len(in.Conflicts) > 0 {
+		conflicts := make([]client.Conflict, len(in.Conflicts))
+		for i, conflict := range in.Conflicts {
+			converted, err := wireConflict(conflict)
+			if err != nil {
+				return client.AcquireResponse{}, err
+			}
+			conflicts[i] = converted
+		}
+		out.Conflicts = &conflicts
+	}
+
+	return out, nil
+}
+
+func wireQueryResult(in claims.QueryResult) (client.QueryResponse, error) {
+	out := client.QueryResponse{
+		AllowedForCaller: in.AllowedForCaller,
+		At:               in.At,
+		Free:             in.Free,
+		Known:            in.Known,
+		Projected:        in.Projected,
+	}
+	if in.Claims != nil {
+		out.Claims = make([]client.Claim, len(in.Claims))
+		for i, claim := range in.Claims {
+			converted, err := wireClaim(claim)
+			if err != nil {
+				return client.QueryResponse{}, err
+			}
+			out.Claims[i] = converted
+		}
+	}
+
+	return out, nil
+}
+
+func wireMutationResult(in claims.MutationResult) (client.MutationResponse, error) {
+	claim, err := wireClaim(in.Claim)
+	if err != nil {
+		return client.MutationResponse{}, err
+	}
+
+	return client.MutationResponse{Changed: in.Changed, Claim: claim}, nil
+}
+
+// Register installs browser-login, explicit claim, and read-only catalog
+// routes. The context, config and logger must be the same startup values used
+// to provide client.
 func Register(ctx context.Context, config cfg.Config, logger log.Logger, router *httpserver.Router, ops claims.Operations, identities auth.Authenticator, client sqlc.Client) error {
 	if ctx == nil || router == nil || ops == nil || identities == nil || client == nil {
 		return errors.New("api: context, router, service, authenticator, and client are required")
 	}
-	h := &service{ops: ops, identities: identities}
+	var authSettings auth.Settings
+	if config != nil {
+		if err := config.UnmarshalKey("claimy.auth", &authSettings); err != nil {
+			return fmt.Errorf("api: read auth settings: %w", err)
+		}
+	}
+	if err := auth.ValidateCLISettings(authSettings); err != nil {
+		return fmt.Errorf("api: validate auth CLI settings: %w", err)
+	}
+	h := &service{ops: ops, identities: identities, login: authSettings}
+	router.GET("/v1/auth/config", h.loginConfig)
+	router.GET("/v1/auth/me", h.loginIdentity)
 	router.POST("/v1/claims/acquire", h.acquire)
 	router.POST("/v1/claims/query", h.query)
 	router.POST("/v1/claims/:id/release", h.release)
@@ -40,6 +196,37 @@ func Register(ctx context.Context, config cfg.Config, logger log.Logger, router 
 	}
 
 	return nil
+}
+
+func (s *service) loginConfig(c *gin.Context) {
+	if !s.login.CLI.Enabled {
+		writeError(c, claims.NewError(claims.LoginDisabled, "browser login is disabled"))
+
+		return
+	}
+	var params *map[string]string
+	if len(s.login.CLI.AuthorizationParams) > 0 {
+		params = &s.login.CLI.AuthorizationParams
+	}
+	writeJSON(c, http.StatusOK, client.LoginConfig{
+		Issuer:              s.login.REST.Issuer,
+		ClientId:            s.login.CLI.ClientID,
+		Scopes:              s.login.CLI.Scopes,
+		AuthorizationParams: params,
+	})
+}
+
+func (s *service) loginIdentity(c *gin.Context) {
+	actor, ok := s.actor(c)
+	if !ok {
+		return
+	}
+	if actor.Channel != claims.REST {
+		writeError(c, claims.NewError(claims.Forbidden, "manual identity required"))
+
+		return
+	}
+	writeJSON(c, http.StatusOK, client.LoginIdentity{Email: openapi_types.Email(actor.Email)})
 }
 
 func (s *service) actor(c *gin.Context) (claims.Actor, bool) {
@@ -98,7 +285,7 @@ func (s *service) acquire(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var in AcquireRequest
+	var in client.AcquireRequest
 	if err := decode(c, &in); err != nil {
 		writeError(c, err)
 
@@ -131,7 +318,13 @@ func (s *service) acquire(c *gin.Context) {
 
 		return
 	}
-	writeJSON(c, http.StatusOK, out)
+	wireOut, err := wireAcquireResult(out)
+	if err != nil {
+		writeError(c, claims.NewError(claims.StorageError, "failed to encode acquire response"))
+
+		return
+	}
+	writeJSON(c, http.StatusOK, wireOut)
 }
 
 func (s *service) query(c *gin.Context) {
@@ -139,7 +332,7 @@ func (s *service) query(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var in QueryRequest
+	var in client.QueryRequest
 	if err := decode(c, &in); err != nil {
 		writeError(c, err)
 
@@ -180,7 +373,13 @@ func (s *service) query(c *gin.Context) {
 
 		return
 	}
-	writeJSON(c, http.StatusOK, out)
+	wireOut, err := wireQueryResult(out)
+	if err != nil {
+		writeError(c, claims.NewError(claims.StorageError, "failed to encode query response"))
+
+		return
+	}
+	writeJSON(c, http.StatusOK, wireOut)
 }
 
 func (s *service) release(c *gin.Context) {
@@ -188,7 +387,7 @@ func (s *service) release(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var in MutationRequest
+	var in client.MutationRequest
 	if err := decode(c, &in); err != nil {
 		writeError(c, err)
 
@@ -205,7 +404,13 @@ func (s *service) release(c *gin.Context) {
 
 		return
 	}
-	writeJSON(c, http.StatusOK, out)
+	wireOut, err := wireMutationResult(out)
+	if err != nil {
+		writeError(c, claims.NewError(claims.StorageError, "failed to encode release response"))
+
+		return
+	}
+	writeJSON(c, http.StatusOK, wireOut)
 }
 
 func (s *service) expiry(c *gin.Context) {
@@ -213,7 +418,7 @@ func (s *service) expiry(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var in ExpiryRequest
+	var in client.ExpiryRequest
 	if err := decode(c, &in); err != nil {
 		writeError(c, err)
 
@@ -231,7 +436,13 @@ func (s *service) expiry(c *gin.Context) {
 
 		return
 	}
-	writeJSON(c, http.StatusOK, out)
+	wireOut, err := wireMutationResult(out)
+	if err != nil {
+		writeError(c, claims.NewError(claims.StorageError, "failed to encode expiry response"))
+
+		return
+	}
+	writeJSON(c, http.StatusOK, wireOut)
 }
 
 func writeJSON(c *gin.Context, status int, v any) {
@@ -244,7 +455,7 @@ func writeError(c *gin.Context, err error) {
 	if status == 0 {
 		status = http.StatusInternalServerError
 	}
-	writeJSON(c, status, ErrorResponse{Error: ErrorDetail{Code: ErrorDetailCode(errorCode(err)), Message: safeMessage(err), Status: int32(status)}})
+	writeJSON(c, status, client.ErrorResponse{Error: client.ErrorDetail{Code: client.ErrorDetailCode(errorCode(err)), Message: safeMessage(err), Status: int32(status)}})
 }
 
 func errorCode(err error) claims.ErrorCode {
@@ -278,7 +489,7 @@ func ErrorMapper(err error) (int, bool) {
 		return 401, true
 	case claims.Forbidden:
 		return 403, true
-	case claims.NotFound:
+	case claims.NotFound, claims.LoginDisabled:
 		return 404, true
 	case claims.HistoryUnavailable:
 		return 410, true
@@ -293,5 +504,5 @@ func ErrorMapper(err error) (int, bool) {
 
 // ErrorHandler returns the API error payload for a typed claim error.
 func ErrorHandler(status int, err error) any {
-	return ErrorResponse{Error: ErrorDetail{Code: ErrorDetailCode(errorCode(err)), Message: safeMessage(err), Status: int32(status)}}
+	return client.ErrorResponse{Error: client.ErrorDetail{Code: client.ErrorDetailCode(errorCode(err)), Message: safeMessage(err), Status: int32(status)}}
 }

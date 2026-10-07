@@ -61,6 +61,7 @@ if [ "$go_mod_version" != "$mise_go_version" ]; then
 fi
 
 for tool_module in \
+  'go:github.com/justtrackio/gotempl github.com/justtrackio/gotempl' \
   'mockery github.com/vektra/mockery/v3' \
   'oapi-codegen github.com/oapi-codegen/oapi-codegen/v2' \
   'go:github.com/pressly/goose/v3/cmd/goose github.com/pressly/goose/v3'

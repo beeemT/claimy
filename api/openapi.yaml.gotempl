@@ -1,0 +1,63 @@
+openapi: 3.0.3
+info:
+  title: Claimy API
+  version: 1.0.0
+  description: Authenticated environment-claim and read-only catalog API.
+security:
+  - BearerAuth: []
+paths:
+  {{- includeOAPIPaths "api/auth.yaml" | trim | nindent 2 }}
+  {{- includeOAPIPaths "api/claims.yaml" | trim | nindent 2 }}
+  {{- includeOAPIPaths "api/catalog.yaml" | trim | nindent 2 }}
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    BadRequest:
+      description: Invalid request, filter, scope, time, or pagination.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    Forbidden:
+      description: Authenticated identity is outside the configured team.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    NotFound:
+      description: Claim or catalog identity does not exist.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    LoginDisabled:
+      description: Browser login is disabled.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    ConflictResponse:
+      description: Revision conflict or request ID reused with another payload.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    HistoryUnavailable:
+      description: Requested history predates the retention window.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+    ServerError:
+      description: Storage or unexpected service failure.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+  schemas:
+    {{- includeOAPISchemas "api/auth.yaml" | trim | nindent 4 }}
+    {{- includeOAPISchemas "api/claims.yaml" | trim | nindent 4 }}
+    {{- includeOAPISchemas "api/catalog.yaml" | trim | nindent 4 }}
+    {{- includeOAPISchemas "api/error.yaml" | trim | nindent 4 }}

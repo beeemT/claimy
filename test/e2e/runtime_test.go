@@ -37,7 +37,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beeemT/claimy/pkg/client"
 	"github.com/beeemT/claimy/test/support"
+	"github.com/google/uuid"
 )
 
 const (
@@ -80,9 +82,661 @@ func TestImageRuntimeIntegration(t *testing.T) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	waitForHealth(t, client, baseURL, container.id)
 
+	runAPICLISmoke(t, baseURL, container.id, fixture, jwks, suffix)
 	runRESTSmoke(t, client, baseURL, fixture, jwks, suffix)
 	runChatSmoke(t, client, baseURL, fixture, jwks, suffix)
 	assertGracefulShutdown(t, container)
+}
+
+// runAPICLISmoke proves that the shipped executable's root API client commands
+// perform real signed requests against the image service.
+func runAPICLISmoke(t *testing.T, baseURL, containerID string, fixture *support.Fixture, jwks *testJWKS, suffix string) {
+	t.Helper()
+	actors := newAPICLISmokeActors(t, jwks, suffix)
+	runPublicClientSmoke(t, baseURL, fixture, actors.ownerToken, suffix, actors.ownerEmail, actors.ownerSubject)
+	runners := prepareAPICLISmokeRunners(t, baseURL, containerID, actors)
+	runCLIClaimSmokes(t, fixture, suffix, actors, runners)
+	runAPICLIDatabaseFailureSmoke(t, baseURL, fixture, suffix, actors, runners)
+}
+
+type apiCLISmokeActors struct {
+	ownerToken, ownerEmail, ownerSubject string
+	busyToken, busyEmail, busySubject    string
+}
+
+func newAPICLISmokeActors(t *testing.T, jwks *testJWKS, suffix string) apiCLISmokeActors {
+	t.Helper()
+	actors := apiCLISmokeActors{
+		ownerSubject: "cli-user-" + suffix,
+		ownerEmail:   "cli.owner@" + e2eTeamDomain,
+		busySubject:  "cli-busy-user-" + suffix,
+		busyEmail:    "cli-busy@" + e2eTeamDomain,
+	}
+	actors.ownerToken = signIDToken(t, jwks.jwtKey, e2eRESTIssuer, e2eRESTAudience, actors.ownerSubject, actors.ownerEmail, false)
+	actors.busyToken = signIDToken(t, jwks.jwtKey, e2eRESTIssuer, e2eRESTAudience, actors.busySubject, actors.busyEmail, false)
+
+	return actors
+}
+
+type apiCLISmokeRunners struct {
+	root                    string
+	nativeRun, containerRun func(string, ...string) cliCommandResult
+}
+
+func prepareAPICLISmokeRunners(t *testing.T, baseURL, containerID string, actors apiCLISmokeActors) apiCLISmokeRunners {
+	t.Helper()
+	tempDir := t.TempDir()
+	tokenPaths := map[string]string{
+		actors.ownerToken: writeCLIToken(t, tempDir, "id-token-0", actors.ownerToken),
+		actors.busyToken:  writeCLIToken(t, tempDir, "id-token-1", actors.busyToken),
+	}
+	root := repositoryRoot(t)
+	binary := filepath.Join(tempDir, "claimy")
+	build := exec.CommandContext(t.Context(), "go", "build", "-trimpath", "-o", binary, "./cmd/claimy")
+	build.Dir = root
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build native Claimy binary: %v\n%s", err, redactDiagnosticText(output))
+	}
+
+	nativeRun := func(token string, args ...string) cliCommandResult {
+		path, ok := tokenPaths[token]
+		if !ok {
+			t.Fatalf("native CLI token was not materialized")
+		}
+		commandArgs := append([]string{"--url", baseURL, "--token-file", path}, args...)
+
+		return runCLICommand(t, nil, binary, commandArgs...)
+	}
+	containerURL := "http://127.0.0.1:8088"
+	containerRun := func(token string, args ...string) cliCommandResult {
+		commandArgs := append([]string{
+			"exec", "-e", "CLAIMY_ID_TOKEN=" + token, containerID, "/app/claimy",
+			"--url", containerURL,
+		}, args...)
+
+		return runCLICommand(t, nil, "docker", commandArgs...)
+	}
+
+	return apiCLISmokeRunners{root: root, nativeRun: nativeRun, containerRun: containerRun}
+}
+
+func writeCLIToken(t *testing.T, tempDir, name, token string) string {
+	t.Helper()
+	path := filepath.Join(tempDir, name)
+	if err := os.WriteFile(path, []byte(token), 0o600); err != nil {
+		t.Fatalf("write CLI token")
+	}
+
+	return path
+}
+
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+	root := ""
+	if _, source, _, ok := runtime.Caller(0); ok {
+		root = filepath.Dir(filepath.Dir(filepath.Dir(source)))
+	}
+	if root == "" {
+		t.Fatalf("locate repository root")
+	}
+
+	return root
+}
+
+func runCLIClaimSmokes(t *testing.T, fixture *support.Fixture, suffix string, actors apiCLISmokeActors, runners apiCLISmokeRunners) {
+	t.Helper()
+	for _, smoke := range []struct {
+		name string
+		run  func(string, ...string) cliCommandResult
+	}{
+		{name: "native", run: runners.nativeRun},
+		{name: "container", run: runners.containerRun},
+	} {
+		help := smoke.run(actors.ownerToken, "--help")
+		requireCLIExit(t, help, 0, smoke.name+" CLI help")
+		if !bytes.Contains(append(append([]byte{}, help.stdout...), help.stderr...), []byte("acquire")) {
+			t.Fatalf("%s CLI help omitted acquire", smoke.name)
+		}
+		exerciseClaimCLI(t, fixture, smoke.name, "image-cli-"+smoke.name+"-"+suffix,
+			actors.ownerToken, actors.ownerEmail, actors.ownerSubject, actors.busyToken, actors.busyEmail, actors.busySubject, smoke.run)
+	}
+}
+
+type failedAcquireAttempt struct {
+	group, requestID string
+}
+
+func runAPICLIDatabaseFailureSmoke(t *testing.T, baseURL string, fixture *support.Fixture, suffix string, actors apiCLISmokeActors, runners apiCLISmokeRunners) {
+	t.Helper()
+	if _, err := fixture.SQLDB.ExecContext(t.Context(), "RENAME TABLE claims TO claims_e2e_broken"); err != nil {
+		t.Fatalf("disable claims table for storage-failure smoke: %v", err)
+	}
+	claimsTableRenamed := true
+	defer func() {
+		if !claimsTableRenamed {
+			return
+		}
+		if _, err := fixture.SQLDB.ExecContext(context.Background(), "RENAME TABLE claims_e2e_broken TO claims"); err != nil {
+			t.Errorf("restore claims table after storage-failure smoke: %v", err)
+		}
+	}()
+
+	failed := []failedAcquireAttempt{
+		runPublicClientStorageFailure(t, baseURL, suffix, actors.ownerToken),
+		runNativeCLIStorageFailure(t, suffix, actors.ownerToken, runners.nativeRun),
+		runCIShellStorageFailure(t, runners.root, baseURL, suffix, actors.ownerToken),
+	}
+	if _, err := fixture.SQLDB.ExecContext(t.Context(), "RENAME TABLE claims_e2e_broken TO claims"); err != nil {
+		t.Fatalf("restore claims table after storage-failure smoke: %v", err)
+	}
+	claimsTableRenamed = false
+	for _, attempt := range failed {
+		assertNoFailedAcquirePersistence(t, fixture, attempt.group, attempt.requestID)
+	}
+}
+
+func runPublicClientStorageFailure(t *testing.T, baseURL, suffix, ownerToken string) failedAcquireAttempt {
+	t.Helper()
+	attempt := failedAcquireAttempt{group: "image-api-db-failure-" + suffix, requestID: uuid.NewString()}
+	app := "api"
+	api, err := client.New(baseURL, client.WithBearerToken(ownerToken))
+	if err != nil {
+		t.Fatalf("create public client for storage-failure smoke: %v", err)
+	}
+	_, storageErr := api.Acquire(t.Context(), client.AcquireRequest{
+		Group: attempt.group, App: &app, Environments: []client.Environment{client.Sandbox},
+		RequestId: attempt.requestID,
+	})
+	var apiErr *client.APIError
+	if !errors.As(storageErr, &apiErr) || apiErr.StatusCode != http.StatusInternalServerError || apiErr.Code != client.ErrorDetailCodeStorageError {
+		t.Fatalf("public client did not report the real API storage failure as a structured error")
+	}
+
+	return attempt
+}
+
+func runNativeCLIStorageFailure(t *testing.T, suffix, ownerToken string, nativeRun func(string, ...string) cliCommandResult) failedAcquireAttempt {
+	t.Helper()
+	attempt := failedAcquireAttempt{group: "image-cli-db-failure-" + suffix, requestID: uuid.NewString()}
+	result := nativeRun(ownerToken, "acquire", "--group", attempt.group, "--app", "api",
+		"--environments", "sandbox", "--request-id", attempt.requestID)
+	requireCLIExit(t, result, 2, "native CLI storage failure")
+	if len(result.stdout) != 0 || !bytes.Contains(result.stderr, []byte("HTTP 500")) {
+		t.Fatalf("native CLI storage failure was not reported as an API error: stdout=%s stderr=%s",
+			redactDiagnosticText(result.stdout), redactDiagnosticText(result.stderr))
+	}
+
+	return attempt
+}
+
+func runCIShellStorageFailure(t *testing.T, root, baseURL, suffix, ownerToken string) failedAcquireAttempt {
+	t.Helper()
+	attempt := failedAcquireAttempt{group: "image-ci-db-failure-" + suffix, requestID: uuid.NewString()}
+	script := filepath.Join(root, "scripts", "ci-acquire.sh")
+	scriptEnv := environmentWithOverrides(map[string]string{
+		"CLAIMY_URL":          baseURL,
+		"CLAIMY_ID_TOKEN":     ownerToken,
+		"CLAIMY_GROUP":        attempt.group,
+		"CLAIMY_REQUEST_ID":   attempt.requestID,
+		"CLAIMY_ENVIRONMENTS": `["sandbox"]`,
+		"CLAIMY_APP":          "",
+		"CLAIMY_EXPIRES_AT":   "",
+	})
+	result := runCLICommand(t, scriptEnv, "bash", script)
+	requireCLIExit(t, result, 2, "CI acquire script storage failure")
+	if !bytes.Contains(result.stderr, []byte("Claim request failed: HTTP 500")) {
+		t.Fatalf("CI acquire script did not report the real API HTTP 500: %s", redactDiagnosticText(result.stderr))
+	}
+
+	return attempt
+}
+
+func exerciseClaimCLI(
+	t *testing.T,
+	fixture *support.Fixture,
+	name, group, ownerToken, ownerEmail, ownerSubject, busyToken, busyEmail, busySubject string,
+	run func(string, ...string) cliCommandResult,
+) {
+	t.Helper()
+	if ownerEmail == busyEmail || ownerSubject == busySubject {
+		t.Fatalf("%s CLI busy actor must be distinct from the claim owner", name)
+	}
+	smoke := cliClaimSmoke{
+		t: t, fixture: fixture, name: name, group: group,
+		ownerToken: ownerToken, ownerEmail: ownerEmail, ownerSubject: ownerSubject,
+		busyToken: busyToken, busyEmail: busyEmail, busySubject: busySubject, run: run,
+	}
+	acquired := smoke.acquire()
+	smoke.assertActiveReplayAndBusyAcquire(acquired)
+	smoke.assertCurrentClaim(acquired.claimID)
+	smoke.changeExpiry(acquired.claimID)
+	smoke.assertCatalog()
+	smoke.releaseClaim(acquired.claimID)
+	smoke.assertReleasedClaimAndReplay(acquired)
+}
+
+type cliClaimSmoke struct {
+	t                                    *testing.T
+	fixture                              *support.Fixture
+	name, group                          string
+	ownerToken, ownerEmail, ownerSubject string
+	busyToken, busyEmail, busySubject    string
+	run                                  func(string, ...string) cliCommandResult
+}
+
+type cliClaimAcquisition struct {
+	claimID, requestID string
+}
+
+func (s cliClaimSmoke) acquire() cliClaimAcquisition {
+	s.t.Helper()
+	app := "api"
+	requestID := uuid.NewString()
+	acquire := s.run(s.ownerToken, "acquire", "--group", s.group, "--app", app, "--environments", "both", "--request-id", requestID)
+	requireCLIExit(s.t, acquire, 0, s.name+" CLI acquire")
+	requireNoCLIStderr(s.t, acquire, s.name+" CLI acquire")
+	var acquired client.AcquireResponse
+	decodeJSON(s.t, acquire.stdout, &acquired, s.name+" CLI acquire")
+	if !acquired.Acquired || acquired.Claim == nil || !acquired.Claim.ActiveNow ||
+		string(acquired.Claim.OwnerEmail) != s.ownerEmail || acquired.Claim.Source != client.Manual ||
+		acquired.Claim.Revision != 1 || acquired.Claim.Scope.Group != s.group ||
+		acquired.Claim.Scope.App == nil || *acquired.Claim.Scope.App != app ||
+		len(acquired.Claim.Environments) != 2 ||
+		acquired.Claim.Environments[0] != client.Sandbox || acquired.Claim.Environments[1] != client.Prod {
+		s.t.Fatalf("%s CLI acquire returned an unexpected active claim", s.name)
+	}
+	if acquired.Conflicts != nil && len(*acquired.Conflicts) != 0 {
+		s.t.Fatalf("%s CLI acquire returned conflicts alongside its acquired claim", s.name)
+	}
+	claimID := acquired.Claim.Id.String()
+	assertClaimRow(s.t, s.fixture, claimID, s.ownerEmail, "manual", false, 1)
+	assertHistory(s.t, s.fixture, claimID, []historyRow{
+		{Revision: 1, ActorEmail: s.ownerEmail, ActorIssuer: e2eRESTIssuer, ActorSubject: s.ownerSubject, Channel: "rest", Action: "acquired"},
+	})
+	assertRequestResult(s.t, s.fixture, "rest_user", e2eRESTIssuer, s.ownerSubject, requestID, "acquired", claimID)
+
+	return cliClaimAcquisition{claimID: claimID, requestID: requestID}
+}
+
+func (s cliClaimSmoke) assertActiveReplayAndBusyAcquire(acquired cliClaimAcquisition) {
+	s.t.Helper()
+	activeReplay := s.run(s.ownerToken, "acquire", "--group", s.group, "--app", "api", "--environments", "both",
+		"--request-id", acquired.requestID, "--output", "id")
+	requireCLIExit(s.t, activeReplay, 0, s.name+" CLI active idempotent replay")
+	requireNoCLIStderr(s.t, activeReplay, s.name+" CLI active idempotent replay")
+	if strings.TrimSpace(string(activeReplay.stdout)) != acquired.claimID {
+		s.t.Fatalf("%s CLI active idempotent replay returned a different claim ID", s.name)
+	}
+
+	busyRequestID := uuid.NewString()
+	busy := s.run(s.busyToken, "acquire", "--group", s.group, "--app", "api", "--environments", "both", "--request-id", busyRequestID)
+	requireCLIExit(s.t, busy, 1, s.name+" CLI different-actor busy acquire")
+	requireNoCLIStderr(s.t, busy, s.name+" CLI different-actor busy acquire")
+	var busyResponse client.AcquireResponse
+	decodeJSON(s.t, busy.stdout, &busyResponse, s.name+" CLI different-actor busy acquire")
+	if busyResponse.Acquired || busyResponse.Claim != nil || busyResponse.Conflicts == nil ||
+		len(*busyResponse.Conflicts) != 1 || (*busyResponse.Conflicts)[0].Id.String() != acquired.claimID ||
+		string((*busyResponse.Conflicts)[0].OwnerEmail) != s.ownerEmail ||
+		string((*busyResponse.Conflicts)[0].OwnerEmail) == s.busyEmail {
+		s.t.Fatalf("%s CLI busy response did not identify the active owner's claim", s.name)
+	}
+	assertBusyRequestResult(s.t, s.fixture, e2eRESTIssuer, s.busySubject, busyRequestID)
+	busyID := s.run(s.busyToken, "acquire", "--group", s.group, "--app", "api", "--environments", "both",
+		"--request-id", busyRequestID, "--output", "id")
+	requireCLIExit(s.t, busyID, 1, s.name+" CLI busy id output")
+	if len(busyID.stdout) != 0 || len(busyID.stderr) != 0 {
+		s.t.Fatalf("%s CLI busy result exposed an ID or diagnostic", s.name)
+	}
+}
+
+func (s cliClaimSmoke) assertCurrentClaim(claimID string) {
+	s.t.Helper()
+	query := s.run(s.ownerToken, "query", "--group", s.group, "--app", "api", "--environments", "both")
+	requireCLIExit(s.t, query, 0, s.name+" CLI query")
+	requireNoCLIStderr(s.t, query, s.name+" CLI query")
+	var queried client.QueryResponse
+	decodeJSON(s.t, query.stdout, &queried, s.name+" CLI query")
+	if !queried.Known || queried.Free || !queried.AllowedForCaller || len(queried.Claims) != 1 ||
+		queried.Claims[0].Id.String() != claimID || !queried.Claims[0].ActiveNow ||
+		queried.Claims[0].Revision != 1 || string(queried.Claims[0].OwnerEmail) != s.ownerEmail {
+		s.t.Fatalf("%s CLI query omitted the acquired claim's current owner and state", s.name)
+	}
+}
+
+func (s cliClaimSmoke) changeExpiry(claimID string) {
+	s.t.Helper()
+	expiryRequestID := uuid.NewString()
+	newExpiry := time.Now().UTC().Add(45 * time.Minute).Truncate(time.Second)
+	expiry := s.run(s.ownerToken, "expiry", "--id", claimID, "--expires-at", newExpiry.Format(time.RFC3339),
+		"--revision", "1", "--request-id", expiryRequestID)
+	requireCLIExit(s.t, expiry, 0, s.name+" CLI expiry")
+	requireNoCLIStderr(s.t, expiry, s.name+" CLI expiry")
+	var expiryResponse client.MutationResponse
+	decodeJSON(s.t, expiry.stdout, &expiryResponse, s.name+" CLI expiry")
+	if !expiryResponse.Changed || expiryResponse.Claim.Revision != 2 || !expiryResponse.Claim.ExpiresAt.Equal(newExpiry) {
+		s.t.Fatalf("%s CLI expiry did not advance the claim to revision 2", s.name)
+	}
+	assertClaimRow(s.t, s.fixture, claimID, s.ownerEmail, "manual", false, 2)
+	assertRequestResult(s.t, s.fixture, "rest_user", e2eRESTIssuer, s.ownerSubject, expiryRequestID, "expiry_changed", claimID)
+}
+
+func (s cliClaimSmoke) assertCatalog() {
+	s.t.Helper()
+	groups := s.run(s.ownerToken, "catalog", "groups", "--canonical-name", s.group)
+	requireCLIExit(s.t, groups, 0, s.name+" CLI catalog groups")
+	var groupList client.CatalogGroupsResponse
+	decodeJSON(s.t, groups.stdout, &groupList, s.name+" CLI catalog groups")
+	if groupList.Total != 1 || len(groupList.Results) != 1 || groupList.Results[0].CanonicalName != s.group {
+		s.t.Fatalf("%s CLI catalog groups omitted the acquired group", s.name)
+	}
+	groupResult := s.run(s.ownerToken, "catalog", "group", "--group", s.group)
+	requireCLIExit(s.t, groupResult, 0, s.name+" CLI catalog group")
+	var catalogGroup client.CatalogGroup
+	decodeJSON(s.t, groupResult.stdout, &catalogGroup, s.name+" CLI catalog group")
+	if catalogGroup.CanonicalName != s.group || catalogGroup.Id != groupList.Results[0].Id {
+		s.t.Fatalf("%s CLI catalog group returned a different registered group", s.name)
+	}
+	apps := s.run(s.ownerToken, "catalog", "apps", "--group", s.group, "--canonical-name", "api")
+	requireCLIExit(s.t, apps, 0, s.name+" CLI catalog apps")
+	var appList client.CatalogAppsResponse
+	decodeJSON(s.t, apps.stdout, &appList, s.name+" CLI catalog apps")
+	if appList.Total != 1 || len(appList.Results) != 1 ||
+		appList.Results[0].CanonicalName != "api" || appList.Results[0].GroupId != catalogGroup.Id {
+		s.t.Fatalf("%s CLI catalog apps omitted the registered app", s.name)
+	}
+}
+
+func (s cliClaimSmoke) releaseClaim(claimID string) {
+	s.t.Helper()
+	releaseRequestID := uuid.NewString()
+	release := s.run(s.ownerToken, "release", "--id", claimID, "--request-id", releaseRequestID)
+	requireCLIExit(s.t, release, 0, s.name+" CLI release")
+	requireNoCLIStderr(s.t, release, s.name+" CLI release")
+	var releaseResponse client.MutationResponse
+	decodeJSON(s.t, release.stdout, &releaseResponse, s.name+" CLI release")
+	if !releaseResponse.Changed || releaseResponse.Claim.Revision != 3 ||
+		releaseResponse.Claim.ReleasedAt == nil || releaseResponse.Claim.ActiveNow {
+		s.t.Fatalf("%s CLI release did not advance to an inactive revision 3", s.name)
+	}
+	assertClaimRow(s.t, s.fixture, claimID, s.ownerEmail, "manual", true, 3)
+	assertHistory(s.t, s.fixture, claimID, []historyRow{
+		{Revision: 1, ActorEmail: s.ownerEmail, ActorIssuer: e2eRESTIssuer, ActorSubject: s.ownerSubject, Channel: "rest", Action: "acquired"},
+		{Revision: 2, ActorEmail: s.ownerEmail, ActorIssuer: e2eRESTIssuer, ActorSubject: s.ownerSubject, Channel: "rest", Action: "expiry_changed"},
+		{Revision: 3, ActorEmail: s.ownerEmail, ActorIssuer: e2eRESTIssuer, ActorSubject: s.ownerSubject, Channel: "rest", Action: "released"},
+	})
+	assertRequestResult(s.t, s.fixture, "rest_user", e2eRESTIssuer, s.ownerSubject, releaseRequestID, "released", claimID)
+}
+
+func (s cliClaimSmoke) assertReleasedClaimAndReplay(acquired cliClaimAcquisition) {
+	s.t.Helper()
+	queryReleased := s.run(s.ownerToken, "query", "--group", s.group, "--app", "api", "--environments", "both")
+	requireCLIExit(s.t, queryReleased, 0, s.name+" CLI query after release")
+	var releasedQuery client.QueryResponse
+	decodeJSON(s.t, queryReleased.stdout, &releasedQuery, s.name+" CLI query after release")
+	if !releasedQuery.Known || !releasedQuery.Free || len(releasedQuery.Claims) != 0 {
+		s.t.Fatalf("%s CLI query after release did not report the registered target as free", s.name)
+	}
+
+	inactiveReplay := s.run(s.ownerToken, "acquire", "--group", s.group, "--app", "api", "--environments", "both", "--request-id", acquired.requestID)
+	requireCLIExit(s.t, inactiveReplay, 1, s.name+" CLI inactive same-key replay")
+	requireNoCLIStderr(s.t, inactiveReplay, s.name+" CLI inactive same-key replay")
+	var inactiveResponse client.AcquireResponse
+	decodeJSON(s.t, inactiveReplay.stdout, &inactiveResponse, s.name+" CLI inactive same-key replay")
+	if !inactiveResponse.Acquired || inactiveResponse.Claim == nil || inactiveResponse.Claim.ActiveNow ||
+		inactiveResponse.Claim.Id.String() != acquired.claimID {
+		s.t.Fatalf("%s CLI same-key replay was not distinguished as the original inactive claim", s.name)
+	}
+	inactiveID := s.run(s.ownerToken, "acquire", "--group", s.group, "--app", "api", "--environments", "both",
+		"--request-id", acquired.requestID, "--output", "id")
+	requireCLIExit(s.t, inactiveID, 1, s.name+" CLI inactive id output")
+	if len(inactiveID.stdout) != 0 || len(inactiveID.stderr) != 0 {
+		s.t.Fatalf("%s CLI inactive replay exposed a deployment ID or error", s.name)
+	}
+	assertRequestResult(s.t, s.fixture, "rest_user", e2eRESTIssuer, s.ownerSubject, acquired.requestID, "acquired", acquired.claimID)
+}
+
+type publicClientClaim struct {
+	id, acquireRequestID string
+}
+
+type publicClientSmoke struct {
+	t            *testing.T
+	api          *client.API
+	fixture      *support.Fixture
+	group, app   string
+	ownerEmail   string
+	ownerSubject string
+	environments []client.Environment
+}
+
+func runPublicClientSmoke(t *testing.T, baseURL string, fixture *support.Fixture, token, suffix, ownerEmail, ownerSubject string) {
+	t.Helper()
+	api, err := client.New(baseURL, client.WithBearerToken(token))
+	if err != nil {
+		t.Fatalf("create public API client: %v", err)
+	}
+	smoke := publicClientSmoke{
+		t: t, api: api, fixture: fixture, group: "image-client-" + suffix, app: "api",
+		ownerEmail: ownerEmail, ownerSubject: ownerSubject,
+		environments: []client.Environment{client.Sandbox, client.Prod},
+	}
+	claim := smoke.acquireClaim()
+	smoke.assertActiveReplayAndPayloadConflict(claim)
+	smoke.assertActiveQuery(claim)
+	smoke.assertCatalog()
+	smoke.changeExpiryAndAssertQuery(claim)
+	smoke.releaseClaim(claim)
+	smoke.assertReleasedClaimAndReplay(claim)
+}
+
+func (s publicClientSmoke) acquireClaim() publicClientClaim {
+	s.t.Helper()
+	requestID := uuid.NewString()
+	acquired, err := s.api.Acquire(s.t.Context(), client.AcquireRequest{
+		Group: s.group, App: &s.app, Environments: s.environments, RequestId: requestID,
+	})
+	if err != nil {
+		s.t.Fatalf("public client acquire: %v", err)
+	}
+	if acquired == nil || !acquired.Acquired || acquired.Claim == nil || !acquired.Claim.ActiveNow ||
+		string(acquired.Claim.OwnerEmail) != s.ownerEmail || acquired.Claim.Source != client.Manual ||
+		acquired.Claim.Revision != 1 || acquired.Claim.Scope.Group != s.group ||
+		acquired.Claim.Scope.App == nil || *acquired.Claim.Scope.App != s.app ||
+		len(acquired.Claim.Environments) != 2 ||
+		acquired.Claim.Environments[0] != client.Sandbox || acquired.Claim.Environments[1] != client.Prod {
+		s.t.Fatalf("public client acquire returned an unexpected active claim")
+	}
+	if acquired.Conflicts != nil && len(*acquired.Conflicts) != 0 {
+		s.t.Fatalf("public client acquire returned conflicts alongside its acquired claim")
+	}
+	claimID := acquired.Claim.Id.String()
+	assertClaimRow(s.t, s.fixture, claimID, s.ownerEmail, "manual", false, 1)
+	assertHistory(s.t, s.fixture, claimID, []historyRow{
+		{Revision: 1, ActorEmail: s.ownerEmail, ActorIssuer: e2eRESTIssuer, ActorSubject: s.ownerSubject, Channel: "rest", Action: "acquired"},
+	})
+	assertRequestResult(s.t, s.fixture, "rest_user", e2eRESTIssuer, s.ownerSubject, requestID, "acquired", claimID)
+
+	return publicClientClaim{id: claimID, acquireRequestID: requestID}
+}
+
+func (s publicClientSmoke) assertActiveReplayAndPayloadConflict(claim publicClientClaim) {
+	s.t.Helper()
+	replayed, err := s.api.Acquire(s.t.Context(), client.AcquireRequest{
+		Group: s.group, App: &s.app, Environments: s.environments, RequestId: claim.acquireRequestID,
+	})
+	if err != nil || replayed == nil || !replayed.Acquired || replayed.Claim == nil ||
+		!replayed.Claim.ActiveNow || replayed.Claim.Id.String() != claim.id {
+		s.t.Fatalf("public client active same-key replay did not return the original claim")
+	}
+	mismatched, mismatchErr := s.api.Acquire(s.t.Context(), client.AcquireRequest{
+		Group: s.group, App: &s.app, Environments: []client.Environment{client.Sandbox}, RequestId: claim.acquireRequestID,
+	})
+	var conflictErr *client.APIError
+	if mismatched != nil || !errors.As(mismatchErr, &conflictErr) ||
+		conflictErr.StatusCode != http.StatusConflict || conflictErr.Code != client.ErrorDetailCodeConflict {
+		s.t.Fatalf("public client did not reject a reused request ID with a different payload")
+	}
+}
+
+func (s publicClientSmoke) assertActiveQuery(claim publicClientClaim) {
+	s.t.Helper()
+	queried, err := s.api.Query(s.t.Context(), client.QueryRequest{Group: s.group, App: &s.app, Environments: &s.environments})
+	if err != nil || queried == nil || !queried.Known || queried.Free || !queried.AllowedForCaller ||
+		len(queried.Claims) != 1 || queried.Claims[0].Id.String() != claim.id ||
+		!queried.Claims[0].ActiveNow || queried.Claims[0].Revision != 1 ||
+		string(queried.Claims[0].OwnerEmail) != s.ownerEmail {
+		s.t.Fatalf("public client query omitted the active claim's state and owner")
+	}
+}
+
+func (s publicClientSmoke) assertCatalog() {
+	s.t.Helper()
+	limit, offset := int32(10), int32(0)
+	groupRequest := client.CatalogListRequest{
+		Filter: &client.CatalogFilter{CanonicalName: &s.group},
+		Page:   &client.CatalogPage{Limit: &limit, Offset: &offset},
+	}
+	groups, err := s.api.ListGroups(s.t.Context(), groupRequest)
+	if err != nil || groups == nil || groups.Total != 1 || len(groups.Results) != 1 ||
+		groups.Results[0].CanonicalName != s.group {
+		s.t.Fatalf("public client list groups omitted the registered group")
+	}
+	catalogGroup, err := s.api.GetGroup(s.t.Context(), s.group)
+	if err != nil || catalogGroup == nil || catalogGroup.CanonicalName != s.group ||
+		catalogGroup.Id != groups.Results[0].Id {
+		s.t.Fatalf("public client get group did not return the registered group")
+	}
+	appRequest := client.CatalogListRequest{
+		Filter: &client.CatalogFilter{CanonicalName: &s.app},
+		Page:   &client.CatalogPage{Limit: &limit, Offset: &offset},
+	}
+	apps, err := s.api.ListApps(s.t.Context(), s.group, appRequest)
+	if err != nil || apps == nil || apps.Total != 1 || len(apps.Results) != 1 ||
+		apps.Results[0].CanonicalName != s.app || apps.Results[0].GroupId != catalogGroup.Id {
+		s.t.Fatalf("public client list apps omitted the registered app")
+	}
+}
+
+func (s publicClientSmoke) changeExpiryAndAssertQuery(claim publicClientClaim) {
+	s.t.Helper()
+	expiryRequestID := uuid.NewString()
+	expiresAt := time.Now().UTC().Add(45 * time.Minute).Truncate(time.Microsecond)
+	expiry, err := s.api.ChangeExpiry(s.t.Context(), claim.id, client.ExpiryRequest{
+		ExpiresAt: expiresAt, ExpectedRevision: 1, RequestId: expiryRequestID,
+	})
+	if err != nil || expiry == nil || !expiry.Changed || expiry.Claim.Revision != 2 ||
+		!expiry.Claim.ExpiresAt.Equal(expiresAt) {
+		s.t.Fatalf("public client expiry change did not advance the claim to revision 2")
+	}
+	assertClaimRow(s.t, s.fixture, claim.id, s.ownerEmail, "manual", false, 2)
+	assertRequestResult(s.t, s.fixture, "rest_user", e2eRESTIssuer, s.ownerSubject, expiryRequestID, "expiry_changed", claim.id)
+
+	queryAfterExpiry, err := s.api.Query(s.t.Context(), client.QueryRequest{Group: s.group, App: &s.app, Environments: &s.environments})
+	if err != nil || queryAfterExpiry == nil || !queryAfterExpiry.Known || queryAfterExpiry.Free ||
+		!queryAfterExpiry.AllowedForCaller || len(queryAfterExpiry.Claims) != 1 ||
+		queryAfterExpiry.Claims[0].Id.String() != claim.id || !queryAfterExpiry.Claims[0].ActiveNow ||
+		queryAfterExpiry.Claims[0].Revision != 2 || !queryAfterExpiry.Claims[0].ExpiresAt.Equal(expiresAt) {
+		s.t.Fatalf("public client query did not return the updated expiry revision")
+	}
+}
+
+func (s publicClientSmoke) releaseClaim(claim publicClientClaim) {
+	s.t.Helper()
+	releaseRequestID := uuid.NewString()
+	released, err := s.api.Release(s.t.Context(), claim.id, client.MutationRequest{RequestId: releaseRequestID})
+	if err != nil || released == nil || !released.Changed || released.Claim.Revision != 3 ||
+		released.Claim.ReleasedAt == nil || released.Claim.ActiveNow {
+		s.t.Fatalf("public client release did not advance the claim to inactive revision 3")
+	}
+	assertClaimRow(s.t, s.fixture, claim.id, s.ownerEmail, "manual", true, 3)
+	assertHistory(s.t, s.fixture, claim.id, []historyRow{
+		{Revision: 1, ActorEmail: s.ownerEmail, ActorIssuer: e2eRESTIssuer, ActorSubject: s.ownerSubject, Channel: "rest", Action: "acquired"},
+		{Revision: 2, ActorEmail: s.ownerEmail, ActorIssuer: e2eRESTIssuer, ActorSubject: s.ownerSubject, Channel: "rest", Action: "expiry_changed"},
+		{Revision: 3, ActorEmail: s.ownerEmail, ActorIssuer: e2eRESTIssuer, ActorSubject: s.ownerSubject, Channel: "rest", Action: "released"},
+	})
+	assertRequestResult(s.t, s.fixture, "rest_user", e2eRESTIssuer, s.ownerSubject, releaseRequestID, "released", claim.id)
+}
+
+func (s publicClientSmoke) assertReleasedClaimAndReplay(claim publicClientClaim) {
+	s.t.Helper()
+	queriedAfterRelease, err := s.api.Query(s.t.Context(), client.QueryRequest{Group: s.group, App: &s.app, Environments: &s.environments})
+	if err != nil || queriedAfterRelease == nil || !queriedAfterRelease.Known ||
+		!queriedAfterRelease.Free || len(queriedAfterRelease.Claims) != 0 {
+		s.t.Fatalf("public client query after release did not show the target as free")
+	}
+	inactiveReplay, err := s.api.Acquire(s.t.Context(), client.AcquireRequest{
+		Group: s.group, App: &s.app, Environments: s.environments, RequestId: claim.acquireRequestID,
+	})
+	if err != nil || inactiveReplay == nil || !inactiveReplay.Acquired || inactiveReplay.Claim == nil ||
+		inactiveReplay.Claim.ActiveNow || inactiveReplay.Claim.Id.String() != claim.id {
+		s.t.Fatalf("public client same-key replay did not preserve the released claim as inactive")
+	}
+	assertRequestResult(s.t, s.fixture, "rest_user", e2eRESTIssuer, s.ownerSubject, claim.acquireRequestID, "acquired", claim.id)
+}
+
+type cliCommandResult struct {
+	stdout   []byte
+	stderr   []byte
+	exitCode int
+}
+
+func runCLICommand(t *testing.T, environment []string, command string, args ...string) cliCommandResult {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), command, args...)
+	if environment != nil {
+		cmd.Env = environment
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	result := cliCommandResult{stdout: stdout.Bytes(), stderr: stderr.Bytes()}
+	if err == nil {
+		return result
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) {
+		t.Fatalf("run %q: %v; stdout=%s stderr=%s", command, err,
+			redactDiagnosticText(result.stdout), redactDiagnosticText(result.stderr))
+	}
+	result.exitCode = exitError.ExitCode()
+
+	return result
+}
+
+func requireCLIExit(t *testing.T, result cliCommandResult, want int, operation string) {
+	t.Helper()
+	if result.exitCode != want {
+		t.Fatalf("%s exited %d, want %d; stdout=%s stderr=%s", operation, result.exitCode, want,
+			redactDiagnosticText(result.stdout), redactDiagnosticText(result.stderr))
+	}
+}
+
+func requireNoCLIStderr(t *testing.T, result cliCommandResult, operation string) {
+	t.Helper()
+	if len(result.stderr) != 0 {
+		t.Fatalf("%s wrote unexpected stderr: %s", operation, redactDiagnosticText(result.stderr))
+	}
+}
+
+func environmentWithOverrides(overrides map[string]string) []string {
+	result := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, value := range os.Environ() {
+		key, _, ok := strings.Cut(value, "=")
+		if !ok {
+			result = append(result, value)
+
+			continue
+		}
+		if _, replaced := overrides[key]; !replaced {
+			result = append(result, value)
+		}
+	}
+	for key, value := range overrides {
+		result = append(result, key+"="+value)
+	}
+
+	return result
 }
 
 func runRESTSmoke(t *testing.T, client *http.Client, baseURL string, fixture *support.Fixture, jwks *testJWKS, suffix string) {
@@ -709,6 +1363,52 @@ func assertRequestResult(t *testing.T, fixture *support.Fixture, principalKind, 
 	}
 	if gotOutcome != outcome || !gotClaimID.Valid || gotClaimID.String != claimID {
 		t.Fatalf("persisted mutation result has an unexpected outcome or claim")
+	}
+}
+
+func assertBusyRequestResult(t *testing.T, fixture *support.Fixture, issuer, principalID, requestID string) {
+	t.Helper()
+	var outcome string
+	var claimID sql.NullString
+	err := fixture.SQLDB.QueryRowContext(fixture.Context,
+		"SELECT outcome, claim_id FROM request_results WHERE principal_kind = ? AND principal_issuer = ? AND principal_id = ? AND request_id = ?",
+		"rest_user", issuer, principalID, requestID,
+	).Scan(&outcome, &claimID)
+	if err != nil {
+		t.Fatalf("read persisted busy request result")
+	}
+	if outcome != "busy" || claimID.Valid {
+		t.Fatalf("persisted busy request result has an unexpected outcome or claim")
+	}
+}
+
+func countRows(t *testing.T, fixture *support.Fixture, query string, args ...any) int64 {
+	t.Helper()
+	var count int64
+	if err := fixture.SQLDB.QueryRowContext(fixture.Context, query, args...).Scan(&count); err != nil {
+		t.Fatalf("count persisted e2e rows")
+	}
+
+	return count
+}
+
+func assertNoFailedAcquirePersistence(t *testing.T, fixture *support.Fixture, group, requestID string) {
+	t.Helper()
+	checks := []struct {
+		name, query string
+		args        []any
+	}{
+		{name: "catalog group", query: "SELECT COUNT(*) FROM app_groups WHERE canonical_name = ?", args: []any{group}},
+		{name: "catalog app", query: "SELECT COUNT(*) FROM apps a JOIN app_groups g ON g.id = a.group_id WHERE g.canonical_name = ?", args: []any{group}},
+		{name: "claim", query: "SELECT COUNT(*) FROM claims c JOIN app_groups g ON g.id = c.group_id WHERE g.canonical_name = ?", args: []any{group}},
+		{name: "claim environment", query: "SELECT COUNT(*) FROM claim_environments e JOIN claims c ON c.id = e.claim_id JOIN app_groups g ON g.id = c.group_id WHERE g.canonical_name = ?", args: []any{group}},
+		{name: "claim history", query: "SELECT COUNT(*) FROM claim_versions v JOIN claims c ON c.id = v.claim_id JOIN app_groups g ON g.id = c.group_id WHERE g.canonical_name = ?", args: []any{group}},
+		{name: "request result", query: "SELECT COUNT(*) FROM request_results WHERE request_id = ?", args: []any{requestID}},
+	}
+	for _, check := range checks {
+		if got := countRows(t, fixture, check.query, check.args...); got != 0 {
+			t.Fatalf("failed API storage request persisted %d %s rows", got, check.name)
+		}
 	}
 }
 

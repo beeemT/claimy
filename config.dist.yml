@@ -56,6 +56,15 @@ claimy:
       issuer: https://accounts.google.com
       audience: https://claimy.example.com/v1/chat/events
       jwks_url: https://www.googleapis.com/oauth2/v3/certs
+    cli:
+      enabled: false
+      client_id: claimy-local
+      scopes:
+        - openid
+        - email
+      authorization_params:
+        access_type: offline
+        prompt: consent
   chat:
     app_identity: claimy
     allowed_spaces:

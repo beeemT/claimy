@@ -1,6 +1,7 @@
 # Locally built executable and Go test output
 /build/bin/
 /coverage.out
+/dist/
 /coverage.html
 *.coverprofile
 *.prof

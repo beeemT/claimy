@@ -755,3 +755,79 @@ func TestJWKSCacheAgeIsBounded(t *testing.T) {
 		t.Fatal("JWKS max-age boundary was not retained")
 	}
 }
+
+func TestValidateCLISettingsRequiresPublicManualClientAndScopes(t *testing.T) {
+	settings := testSettings()
+	settings.CLI.Enabled = true
+	settings.CLI.ClientID = settings.REST.Audience
+	settings.CLI.Scopes = []string{"openid", "email"}
+	if err := ValidateCLISettings(settings); err != nil {
+		t.Fatalf("valid CLI settings rejected: %v", err)
+	}
+	settings.CLI.AuthorizationParams = map[string]string{"prompt": "consent select_account"}
+	if err := ValidateCLISettings(settings); err != nil {
+		t.Fatalf("multi-value public authorization parameter rejected: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*Settings)
+	}{
+		{
+			name: "client ID differs from REST audience",
+			mutate: func(settings *Settings) {
+				settings.CLI.ClientID = "another-client"
+			},
+		},
+		{
+			name: "missing openid scope",
+			mutate: func(settings *Settings) {
+				settings.CLI.Scopes = []string{"email"}
+			},
+		},
+		{
+			name: "duplicate scope",
+			mutate: func(settings *Settings) {
+				settings.CLI.Scopes = []string{"openid", "email", "email"}
+			},
+		},
+		{
+			name: "credential parameter",
+			mutate: func(settings *Settings) {
+				settings.CLI.AuthorizationParams = map[string]string{"client_secret": "must-not-be-public"}
+			},
+		},
+		{
+			name: "protected parameter",
+			mutate: func(settings *Settings) {
+				settings.CLI.AuthorizationParams = map[string]string{"state": "caller-controlled"}
+			},
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := settings
+			candidate.CLI.Scopes = append([]string(nil), settings.CLI.Scopes...)
+			candidate.CLI.AuthorizationParams = map[string]string{}
+			test.mutate(&candidate)
+			if err := ValidateCLISettings(candidate); err == nil {
+				t.Fatal("invalid CLI settings were accepted")
+			}
+		})
+	}
+}
+
+func TestValidateCLISettingsLeavesDisabledLoginOptional(t *testing.T) {
+	settings := Settings{}
+	if err := ValidateCLISettings(settings); err != nil {
+		t.Fatalf("disabled login requires configuration: %v", err)
+	}
+}
+
+func TestNewRejectsInvalidEnabledCLISettings(t *testing.T) {
+	settings := testSettings()
+	settings.CLI = CLISettings{Enabled: true, ClientID: "wrong-client", Scopes: []string{"openid", "email"}}
+	if _, err := NewWithKeys(settings, &mapKeyProvider{keys: map[string]any{}}); err == nil {
+		t.Fatal("invalid enabled CLI settings were accepted by the verifier constructor")
+	}
+}
