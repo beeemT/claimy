@@ -8,6 +8,7 @@ mockery = "3.7.0"
 oapi-codegen = "2.4.1"
 "go:github.com/justtrackio/gotempl" = "1.0.1"
 "go:github.com/pressly/goose/v3/cmd/goose" = "3.24.3"
+"go:github.com/rhysd/actionlint/cmd/actionlint" = "1.7.12"
 
 [tasks.setup]
 description = "Download Go dependencies and install git hooks"
@@ -68,6 +69,21 @@ GOOSE_DRIVER=mysql goose -dir build/migrations/claimy up
 description = "Build the Claimy executable"
 run = "mkdir -p build/bin && go build -o build/bin/claimy ./cmd/claimy"
 
+[tasks.package]
+description = "Build four native Homebrew release archives"
+usage = 'arg "[version]" default="0.0.0" help="Stable release version or local snapshot"'
+run = 'sh scripts/build-archives.sh "${usage_version?}"'
+
+[tasks.formula]
+description = "Generate checksums and a Homebrew formula from dist archives"
+usage = 'arg "[version]" default="0.0.0" help="Version of the archives in dist"'
+run = 'python3 scripts/generate-formula.py "${usage_version?}"'
+
+[tasks.package-local]
+description = "Build local archives and generate the Homebrew formula"
+usage = 'arg "[version]" default="0.0.0" help="Stable release version or local snapshot"'
+run = 'mise run package "${usage_version?}" && mise run formula "${usage_version?}"'
+
 [tasks.run]
 description = "Run Claimy using the safe root distribution configuration"
 run = "go run ./cmd/claimy serve"
@@ -76,6 +92,10 @@ run = "go run ./cmd/claimy serve"
 description = "Scan available Git history and working files with redacted Gitleaks output"
 run = '''gitleaks git --redact --no-banner --log-opts="--all" && gitleaks dir --redact --no-banner .'''
 
+[tasks.ci-lint]
+description = "Validate GitHub Actions workflows"
+run = "actionlint"
+
 [tasks.check]
 description = "Run all local and CI checks"
-run = "mise run version-check && mise run fmt-check && mise run vet && mise run lint && mise run test && mise run test-integration && mise run generate-check && mise run migrate-validate && mise run secret-scan && mise run build"
+run = "mise run version-check && mise run ci-lint && mise run fmt-check && mise run vet && mise run lint && mise run test && mise run test-integration && mise run generate-check && mise run migrate-validate && mise run secret-scan && mise run build"
