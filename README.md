@@ -21,12 +21,14 @@ It keeps the owner and scope unchanged.
 - [Agent skill](#agent-skill)
 - [CLI reference](#cli-reference)
 - [Browser login and keychain](#browser-login-and-keychain)
+- [Authentication configuration](docs/authentication.md)
 - [GitLab CI caller](#gitlab-ci-caller)
 - [REST API](#rest-api)
 - [API client](#api-client)
 - [Google Chat](#google-chat)
 - [Development](#development)
 - [Database and configuration](#database-and-configuration)
+- [Helm installation and configuration](build/helm/claimy/README.md)
 - [Checks and container smoke](#checks-and-container-smoke)
 - [Continuous integration and publishing](#continuous-integration-and-publishing)
 - [License](#license)
@@ -439,6 +441,11 @@ curl --fail http://localhost:8088/health
 ```
 
 A healthy process returns HTTP 200 and `{}`.
+
+`GET /ready` checks MySQL reachability with a two-second deadline.
+It returns HTTP 200 when the database responds and HTTP 503 when it does not.
+Use `/ready` for readiness and `/health` for liveness.
+
 The binary includes Berlin timezone data.
 It handles SIGINT and SIGTERM shutdown.
 
@@ -545,6 +552,11 @@ Use environment variables to override configuration, for example:
 SQLC_DEFAULT_URI_HOST=127.0.0.1 HTTPSERVER_DEFAULT_PORT=9090 mise run run
 ```
 
+Supply `CLAIMY_DATABASE_PASSWORD` through your secret mechanism for a literal database password.
+It takes precedence over the ordinary SQLC password setting after configuration decoding.
+The server and catalog routes share this initialized client and connection pool.
+Do not also put the Secret value in `SQLC_DEFAULT_URI_PASSWORD` or deployment configuration.
+
 Configure these identity settings before normal use:
 
 - `claimy.auth.team_domain`: the allowed account email domain.
@@ -569,7 +581,7 @@ Keep existing deployment approvals and database backups.
 
 ## Checks and container smoke
 
-Mise pins Go, gofumpt, golangci-lint, Prek, Gitleaks, Mockery, gotempl, oapi-codegen, Goose, and actionlint.
+Mise pins Go, gofumpt, golangci-lint, Prek, Gitleaks, Mockery, gotempl, oapi-codegen, Goose, actionlint, Helm, kind, and kubectl.
 Run `mise run generate` after generator input changes.
 `generate-check` rejects tracked and untracked generated drift.
 `version-check` compares Go, template and code generators, Mockery, and Goose module and tool versions.
@@ -581,21 +593,25 @@ Review settings do not change merge requirements.
 mise run check
 mise exec -- prek run --all-files
 docker build --tag claimy:ci .
-CLAIMY_IMAGE=claimy:ci mise exec -- go test -count=1 -tags=integration,fixtures ./test/e2e
+CLAIMY_IMAGE=claimy:ci mise exec -- go test -count=1 -tags=integration,fixtures ./test/e2e -run '^TestImageRuntimeIntegration$'
+CLAIMY_IMAGE=claimy:ci mise run helm-smoke
 ```
 
 The image smoke starts the actual container against disposable MySQL.
 It uses an HTTPS JWKS fixture with a test CA.
 It exercises the public client and native and container CLI.
 It checks signed REST and Chat requests, persisted ownership and history, health, storage-failure exit codes, and graceful shutdown.
-Without `CLAIMY_IMAGE`, normal integration tests skip only the image-specific test.
+Normal integration tests skip the image smoke without `CLAIMY_IMAGE` and skip the opt-in Helm smoke.
+`helm-smoke` requires a local image and the pinned tools. Missing prerequisites fail the task.
+It installs and upgrades the chart in a disposable kind cluster with a private kubeconfig.
+It checks migration ordering, literal Secret passwords, signed GitLab CLI and catalog requests, persisted job identity, and readiness during a verified MySQL outage and recovery.
 The runtime image is static and nonroot.
-It contains the safe configuration, migrations, CA bundle, and embedded timezone data.
+It contains the safe configuration, Goose v3.24.3, migrations, CA bundle, and embedded timezone data.
 It contains no shell or build tools.
 
 ## Continuous integration and publishing
 
-GitHub Actions runs repository checks and the database-backed image smoke.
+GitHub Actions runs repository checks, the database-backed image smoke, and the real kind install/upgrade smoke.
 Public actions are pinned to commit hashes.
 Repository permissions are read-only for ordinary checks.
 Pull requests do not use Docker Hub credentials or publish images.
@@ -603,18 +619,23 @@ After checks pass, `main` and valid Git-tag pushes publish to `docker.io/beeemt/
 The full commit hash and `latest` identify one image digest.
 Tag pushes also publish the exact Git tag.
 OCI labels retain the commit revision and release version.
+Published images support `linux/amd64` and `linux/arm64`.
+Stable tag pushes also publish the chart to `oci://registry-1.docker.io/beeemt/claimy-chart` after the image and package jobs succeed.
+Chart version `X.Y.Z` uses image tag `vX.Y.Z`.
+See the [chart guide](build/helm/claimy/README.md) for required values and Secret setup.
 
 Archive packaging is read-only on pull requests.
 It builds all four native targets with `CGO_ENABLED=0`.
 Pull requests use snapshot version `0.0.0`.
 Stable `v<major>.<minor>.<patch>` tags run checks for the selected tag before packaging and publishing.
 Archives use the deterministic name `claimy_<version-without-v>_<goos>_<goarch>.tar.gz`.
-They are accompanied by `checksums.txt`.
+Native archives are accompanied by `checksums.txt`.
+The artifact set also contains `claimy-chart-<version-without-v>.tgz`.
 The builder excludes macOS resource-fork metadata from the release archives.
 The publishing job is separate.
 Tag releases run automatically after the checks and package builds pass.
 It checks `HOMEBREW_TAP_TOKEN` before publication.
-It publishes the GitHub release archives and checksums.
+It publishes the GitHub release archives, Helm chart archive, and native-archive checksums.
 It updates `Formula/claimy.rb` in `beeemT/homebrew-tap` from the actual archives and their observed SHA256 values.
 
 An authorized `workflow_dispatch` from the default branch may retry an existing stable tag.
@@ -624,7 +645,7 @@ The token is not placed in command arguments or a remote URL.
 Rerunning an unchanged tap formula is a no-op.
 
 To build the archives locally, install Python 3 and the Mise tools.
-This command generates the four archives, `checksums.txt`, and `claimy.rb` under `dist/`:
+This command generates the four native archives, `claimy-chart-0.0.0.tgz`, native-archive `checksums.txt`, and `claimy.rb` under `dist/`:
 
 ```sh
 mise run package-local v0.0.0

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beeemT/claimy/internal/auth"
@@ -40,13 +41,6 @@ func (catalogApp) GetUpdatedAt() time.Time { return time.Time{} }
 func (catalogApp) TableName() string { return "apps" }
 
 type (
-	catalogCreate struct {
-		CanonicalName string `json:"canonicalName"`
-	}
-	catalogUpdate struct {
-		sqlh.InputById[string]
-		CanonicalName string `json:"canonicalName"`
-	}
 	catalogFilter struct {
 		CanonicalName *string `json:"canonicalName,omitempty"`
 	}
@@ -95,52 +89,12 @@ func (in appListInput) ValidatePagination() error {
 	return nil
 }
 
-func groupDefinition() sqlh.CrudDefinition[uint64, catalogGroup, string, catalogCreate, catalogUpdate, appListInput, client.CatalogGroup] {
-	d := sqlh.CrudDefinition[uint64, catalogGroup, string, catalogCreate, catalogUpdate, appListInput, client.CatalogGroup]{
-		CreateInput: func(_ context.Context, in *catalogCreate) (*catalogGroup, error) {
-			return &catalogGroup{CanonicalName: in.CanonicalName}, nil
-		},
-		UpdateInput: func(_ context.Context, e *catalogGroup, in *catalogUpdate) (*catalogGroup, error) {
-			e.CanonicalName = in.CanonicalName
-
-			return e, nil
-		},
-		PatchInputFromEntity: func(_ context.Context, e *catalogGroup) (*catalogUpdate, error) {
-			return &catalogUpdate{InputById: sqlh.InputById[string]{Id: fmt.Sprint(e.Id)}, CanonicalName: e.CanonicalName}, nil
-		},
-		Output: func(_ context.Context, e *catalogGroup) (client.CatalogGroup, error) {
-			return client.CatalogGroup{Id: fmt.Sprint(e.Id), CanonicalName: e.CanonicalName, CreatedAt: e.CreatedAt}, nil
-		},
-	}
-	d.Identity = lookupCatalogGroup
-	d.ListOperation = listCatalogGroups
-
-	return d
+func groupOutput(_ context.Context, e *catalogGroup) (client.CatalogGroup, error) {
+	return client.CatalogGroup{Id: fmt.Sprint(e.Id), CanonicalName: e.CanonicalName, CreatedAt: e.CreatedAt}, nil
 }
 
 func appOutput(_ context.Context, e *catalogApp) (client.CatalogApp, error) {
 	return client.CatalogApp{Id: fmt.Sprint(e.Id), GroupId: fmt.Sprint(e.GroupID), CanonicalName: e.CanonicalName, CreatedAt: e.CreatedAt}, nil
-}
-
-func appDefinition() sqlh.CrudDefinition[uint64, catalogApp, string, catalogCreate, catalogUpdate, appListInput, client.CatalogApp] {
-	d := sqlh.CrudDefinition[uint64, catalogApp, string, catalogCreate, catalogUpdate, appListInput, client.CatalogApp]{
-		CreateInput: func(_ context.Context, in *catalogCreate) (*catalogApp, error) {
-			return &catalogApp{CanonicalName: in.CanonicalName}, nil
-		},
-		UpdateInput: func(_ context.Context, e *catalogApp, in *catalogUpdate) (*catalogApp, error) {
-			e.CanonicalName = in.CanonicalName
-
-			return e, nil
-		},
-		PatchInputFromEntity: func(_ context.Context, e *catalogApp) (*catalogUpdate, error) {
-			return &catalogUpdate{InputById: sqlh.InputById[string]{Id: fmt.Sprint(e.Id)}, CanonicalName: e.CanonicalName}, nil
-		},
-		Output: appOutput,
-	}
-	d.Identity = lookupCatalogApp
-	d.ListOperation = listCatalogApps
-
-	return d
 }
 
 func lookupCatalogGroup(_ context.Context, tx sqlr.TTx, repo sqlr.RepositoryTx[uint64, catalogGroup], id string, _ sqlh.QueryScope, builder func(*sqlr.QueryBuilderSelect)) (*catalogGroup, error) {
@@ -197,21 +151,6 @@ func listCatalogGroups(_ context.Context, tx sqlr.TTx, repo sqlr.RepositoryTx[ui
 	}
 
 	return out, nil
-}
-
-func lookupCatalogApp(_ context.Context, tx sqlr.TTx, repo sqlr.RepositoryTx[uint64, catalogApp], id string, _ sqlh.QueryScope, builder func(*sqlr.QueryBuilderSelect)) (*catalogApp, error) {
-	rows, err := repo.Query(tx, func(q *sqlr.QueryBuilderSelect) {
-		builder(q)
-		q.Where("canonical_name = ?", id)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(rows) == 0 {
-		return nil, claims.NewError(claims.NotFound, "app not found")
-	}
-
-	return &rows[0], nil
 }
 
 func catalogGroupID(ctx context.Context, tx sqlr.TTx, name string) (uint64, error) {
@@ -287,7 +226,78 @@ func listCatalogApps(ctx context.Context, tx sqlr.TTx, repo sqlr.RepositoryTx[ui
 	return out, nil
 }
 
-func registerCatalog(ctx context.Context, config cfg.Config, logger log.Logger, router *httpserver.Router, sqlClient sqlc.Client, identities auth.Authenticator) error {
+type catalogHandlers struct {
+	groupRepository sqlr.RepositoryTx[uint64, catalogGroup]
+	appRepository   sqlr.RepositoryTx[uint64, catalogApp]
+	txRunner        *sqlh.TxRunner
+	closeOnce       sync.Once
+	closeErr        error
+}
+
+func newCatalogHandlers(client sqlc.Client) (*catalogHandlers, error) {
+	groupRepository, err := sqlr.NewRepositoryTxWithSettings[uint64, catalogGroup](client, sqlr.DefaultSettings())
+	if err != nil {
+		return nil, fmt.Errorf("create catalog group repository: %w", err)
+	}
+	appRepository, err := sqlr.NewRepositoryTxWithSettings[uint64, catalogApp](client, sqlr.DefaultSettings())
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("create catalog app repository: %w", err), groupRepository.Close())
+	}
+	txRunner, err := sqlh.NewTxRunnerWithClient(client)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("create catalog transaction runner: %w", err), appRepository.Close(), groupRepository.Close())
+	}
+
+	return &catalogHandlers{
+		groupRepository: groupRepository,
+		appRepository:   appRepository,
+		txRunner:        txRunner,
+	}, nil
+}
+
+func (h *catalogHandlers) Close() error {
+	if h == nil {
+		return nil
+	}
+
+	h.closeOnce.Do(func() {
+		h.closeErr = errors.Join(h.groupRepository.Close(), h.appRepository.Close())
+	})
+
+	return h.closeErr
+}
+
+func (h *catalogHandlers) readGroup(ctx context.Context, input *sqlh.InputById[string]) (client.CatalogGroup, error) {
+	return h.txRunner.RunValue(ctx, input, func(ctx context.Context, tx sqlr.TTx, input *sqlh.InputById[string]) (client.CatalogGroup, error) {
+		if input == nil {
+			return client.CatalogGroup{}, fmt.Errorf("read input is required")
+		}
+		group, err := lookupCatalogGroup(ctx, tx, h.groupRepository, input.Id, nil, func(*sqlr.QueryBuilderSelect) {})
+		if err != nil {
+			return client.CatalogGroup{}, fmt.Errorf("failed to read entity with id %v: %w", input.Id, err)
+		}
+		output, err := groupOutput(ctx, group)
+		if err != nil {
+			return client.CatalogGroup{}, fmt.Errorf("failed to transform read entity: %w", err)
+		}
+
+		return output, nil
+	})
+}
+
+func (h *catalogHandlers) listGroups(ctx context.Context, input *appListInput) (sqlh.ListOutput[client.CatalogGroup], error) {
+	return h.txRunner.RunValue(ctx, input, func(ctx context.Context, tx sqlr.TTx, input *appListInput) (sqlh.ListOutput[client.CatalogGroup], error) {
+		return listCatalogGroups(ctx, tx, h.groupRepository, input)
+	})
+}
+
+func (h *catalogHandlers) listApps(ctx context.Context, input *appListInput) (sqlh.ListOutput[client.CatalogApp], error) {
+	return h.txRunner.RunValue(ctx, input, func(ctx context.Context, tx sqlr.TTx, input *appListInput) (sqlh.ListOutput[client.CatalogApp], error) {
+		return listCatalogApps(ctx, tx, h.appRepository, input)
+	})
+}
+
+func registerCatalog(router *httpserver.Router, sqlClient sqlc.Client, identities auth.Authenticator) error {
 	if sqlClient == nil {
 		return fmt.Errorf("catalog: client is required")
 	}
@@ -301,28 +311,16 @@ func registerCatalog(ctx context.Context, config cfg.Config, logger log.Logger, 
 		c.Set("claimy.actor", h)
 		c.Next()
 	}
-	groupHandler := sqlh.NewCrudHandler(
-		sqlh.SimpleCrudDefinition(groupDefinition()),
-		sqlh.WithRepositorySettings[uint64, catalogGroup](sqlr.DefaultSettings()),
-	)
-	router.HandleWith(httpserver.With(groupHandler, func(r *httpserver.Router, h *sqlh.CrudHandler[uint64, catalogGroup, string, catalogCreate, catalogUpdate, appListInput, client.CatalogGroup]) {
+	handlerFactory := func(_ context.Context, _ cfg.Config, _ log.Logger) (*catalogHandlers, error) {
+		return newCatalogHandlers(sqlClient)
+	}
+	router.HandleWith(httpserver.With(handlerFactory, func(r *httpserver.Router, h *catalogHandlers) {
 		g := r.Group("/v1/catalog")
 		g.Use(authz)
-		g.GET("/groups/:id", httpserver.Bind(h.Read, httpserver.NoBodyBinding{}))
-		g.POST("/groups/query", httpserver.Bind(h.List))
+		g.GET("/groups/:id", httpserver.Bind(h.readGroup, httpserver.NoBodyBinding{}))
+		g.POST("/groups/query", httpserver.Bind(h.listGroups))
+		g.POST("/groups/:group/apps/query", httpserver.Bind(h.listApps))
 	}))
-	appHandler := sqlh.NewCrudHandler(
-		sqlh.SimpleCrudDefinition(appDefinition()),
-		sqlh.WithRepositorySettings[uint64, catalogApp](sqlr.DefaultSettings()),
-	)
-	router.HandleWith(httpserver.With(appHandler, func(r *httpserver.Router, h *sqlh.CrudHandler[uint64, catalogApp, string, catalogCreate, catalogUpdate, appListInput, client.CatalogApp]) {
-		g := r.Group("/v1/catalog")
-		g.Use(authz)
-		g.POST("/groups/:group/apps/query", httpserver.Bind(h.List))
-	}))
-	_ = ctx
-	_ = config
-	_ = logger
 
 	return nil
 }

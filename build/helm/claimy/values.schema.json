@@ -1,0 +1,261 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["image", "database", "config", "service", "migrations"],
+  "properties": {
+    "nameOverride": {
+      "type": "string",
+      "maxLength": 63
+    },
+    "fullnameOverride": {
+      "type": "string",
+      "maxLength": 63
+    },
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "image": {
+      "type": "object",
+      "required": ["repository", "tag", "digest", "pullPolicy"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(:[0-9]+)?(/[A-Za-z0-9._-]+)*$"
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^(|sha256:[A-Fa-f0-9]{64})$"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        },
+        "pullSecrets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "database": {
+      "type": "object",
+      "required": ["host", "port", "name", "user", "existingSecret", "passwordKey", "parameters"],
+      "properties": {
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_]+$"
+        },
+        "user": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_]+$"
+        },
+        "existingSecret": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "passwordKey": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "parameters": {
+          "type": "object",
+          "required": ["loc", "time_zone", "parseTime"],
+          "patternProperties": {
+            "^[A-Za-z0-9_.-]+$": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "loc": {
+              "type": "string",
+              "const": "UTC"
+            },
+            "time_zone": {
+              "type": "string",
+              "const": "'+00:00'"
+            },
+            "parseTime": {
+              "type": "string",
+              "const": "true"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "config": {
+      "type": "object",
+      "required": ["app", "httpserver", "sqlc", "claimy"],
+      "properties": {
+        "app": {
+          "type": "object",
+          "required": ["env", "project", "family", "name"],
+          "properties": {
+            "env": {"type": "string", "minLength": 1},
+            "project": {"type": "string", "minLength": 1},
+            "family": {"type": "string", "minLength": 1},
+            "name": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": true
+        },
+        "httpserver": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "sqlc": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "claimy": {
+          "type": "object",
+          "required": ["auth", "chat"],
+          "properties": {
+            "auth": {
+              "type": "object",
+              "required": ["team_domain", "rest", "gitlab", "chat", "cli"],
+              "properties": {
+                "team_domain": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$"
+                },
+                "rest": {"$ref": "#/definitions/issuerSettings"},
+                "gitlab": {"$ref": "#/definitions/issuerSettings"},
+                "chat": {
+                  "allOf": [
+                    {"$ref": "#/definitions/issuerSettings"},
+                    {"properties": {"issuer": {"const": "https://accounts.google.com"}}}
+                  ]
+                },
+                "cli": {
+                  "type": "object",
+                  "required": ["enabled", "client_id", "scopes", "authorization_params"],
+                  "properties": {
+                    "enabled": {"type": "boolean"},
+                    "client_id": {"type": "string"},
+                    "scopes": {
+                      "type": "array",
+                      "items": {"type": "string"}
+                    },
+                    "authorization_params": {
+                      "type": "object",
+                      "additionalProperties": {"type": "string"}
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "additionalProperties": true
+            },
+            "chat": {
+              "type": "object",
+              "required": ["app_identity", "allowed_spaces", "deadline"],
+              "properties": {
+                "app_identity": {"type": "string", "minLength": 1},
+                "allowed_spaces": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^spaces/[A-Za-z0-9_-]+$"
+                  }
+                },
+                "deadline": {
+                  "type": "string",
+                  "pattern": "^([1-9][0-9]{0,2}ms|[1-9]s|[12][0-9]s|30s)$"
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "service": {
+      "type": "object",
+      "required": ["port"],
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      },
+      "additionalProperties": false
+    },
+    "migrations": {
+      "type": "object",
+      "required": ["enabled", "backoffLimit", "activeDeadlineSeconds", "resources"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "backoffLimit": {"type": "integer", "minimum": 0},
+        "activeDeadlineSeconds": {"type": "integer", "minimum": 1},
+        "resources": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "terminationGracePeriodSeconds": {
+      "type": "integer",
+      "minimum": 75
+    }
+  },
+  "definitions": {
+    "issuerSettings": {
+      "type": "object",
+      "required": ["issuer", "audience", "jwks_url"],
+      "properties": {
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^https://[^\\s]+$"
+        },
+        "audience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\x00-\\x20\\x7f]+$"
+        },
+        "jwks_url": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^https://[^\\s]+$"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

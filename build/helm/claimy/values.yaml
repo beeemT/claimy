@@ -1,0 +1,152 @@
+# Claimy is deliberately configured against an existing MySQL instance and
+# an existing Secret. The chart never creates or manages either credential.
+nameOverride: claimy
+fullnameOverride: ""
+
+replicaCount: 1
+
+image:
+  repository: beeemt/claimy
+  # Required: select an image that contains /app/claimy and /app/goose.
+  tag: ""
+  # Set digest to pin an immutable image. When set, tag is still required.
+  digest: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# The referenced Secret must already exist before Helm runs the migration hook.
+# Its passwordKey value is used by both the server and the migration Job.
+database:
+  host: ""
+  port: 3306
+  name: ""
+  user: ""
+  existingSecret: ""
+  passwordKey: password
+  # These are passed through the MySQL DSN. Values are URL-encoded for Goose.
+  parameters:
+    loc: UTC
+    time_zone: "'+00:00'"
+    parseTime: "true"
+
+# This is the application's native config.dist.yml shape. The chart overlays
+# sqlc.default.uri, sqlc.default.parameters, sqlc.default.migrations, and the
+# HTTP port from the chart-managed values below.
+config:
+  app:
+    env: prod
+    project: claimy
+    family: claimy
+    name: claimy
+  dx:
+    use_random_port: false
+  tracing:
+    provider: noop
+  sampling:
+    enabled: false
+  metric:
+    enabled: false
+  httpserver:
+    default:
+      port: "8088"
+      timeout:
+        drain: 5s
+        shutdown: 60s
+  kernel:
+    kill_timeout: 70s
+  resource_lifecycles:
+    create:
+      enabled: false
+  sqlc:
+    default:
+      driver: mysql
+      max_idle_connections: 2
+      max_open_connections: 10
+      uri:
+        host: ""
+        port: 3306
+        user: ""
+        database: ""
+      parameters:
+        loc: UTC
+        time_zone: "'+00:00'"
+        parseTime: "true"
+      migrations:
+        enabled: false
+        path: build/migrations/claimy
+  claimy:
+    auth:
+      team_domain: ""
+      rest:
+        issuer: ""
+        audience: ""
+        jwks_url: ""
+      gitlab:
+        issuer: ""
+        audience: ""
+        jwks_url: ""
+      chat:
+        issuer: ""
+        audience: ""
+        jwks_url: ""
+      cli:
+        enabled: false
+        client_id: ""
+        scopes: []
+        authorization_params: {}
+    chat:
+      app_identity: ""
+      allowed_spaces: []
+      deadline: 25s
+
+service:
+  port: 8088
+
+migrations:
+  enabled: true
+  backoffLimit: 6
+  activeDeadlineSeconds: 600
+  resources: {}
+
+probes:
+  liveness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 6
+  readiness:
+    initialDelaySeconds: 2
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 6
+
+resources: {}
+
+# The image is scratch/non-root. Keep the pod defaults restrictive and allow
+# only conventional deployment-specific additions such as an IdP CA bundle.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+terminationGracePeriodSeconds: 75
+serviceAccountName: ""
+automountServiceAccountToken: false
+
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+affinity: {}
+tolerations: []
+topologySpreadConstraints: []

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "claimy-chart.fullname" . }}
+  labels:
+    {{- include "claimy-chart.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "claimy-chart.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: claimy-chart
+description: Claimy claim coordination service
+type: application
+version: 0.1.0
+appVersion: "main"

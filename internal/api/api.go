@@ -169,9 +169,8 @@ func wireMutationResult(in claims.MutationResult) (client.MutationResponse, erro
 }
 
 // Register installs browser-login, explicit claim, and read-only catalog
-// routes. The context, config and logger must be the same startup values used
-// to provide client.
-func Register(ctx context.Context, config cfg.Config, logger log.Logger, router *httpserver.Router, ops claims.Operations, identities auth.Authenticator, client sqlc.Client) error {
+// routes using the SQLC client initialized by the application runtime.
+func Register(ctx context.Context, config cfg.Config, _ log.Logger, router *httpserver.Router, ops claims.Operations, identities auth.Authenticator, client sqlc.Client) error {
 	if ctx == nil || router == nil || ops == nil || identities == nil || client == nil {
 		return errors.New("api: context, router, service, authenticator, and client are required")
 	}
@@ -191,7 +190,7 @@ func Register(ctx context.Context, config cfg.Config, logger log.Logger, router 
 	router.POST("/v1/claims/query", h.query)
 	router.POST("/v1/claims/:id/release", h.release)
 	router.PATCH("/v1/claims/:id", h.expiry)
-	if err := registerCatalog(ctx, config, logger, router, client, identities); err != nil {
+	if err := registerCatalog(router, client, identities); err != nil {
 		return err
 	}
 
