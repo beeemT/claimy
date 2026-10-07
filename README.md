@@ -339,7 +339,39 @@ A deployed provider registration remains an operator prerequisite.
 
 ## GitLab CI caller
 
+The native CLI uses a GitLab job ID token directly; it does not need `claimy auth login`.
+Use a job image with a shell and the Claimy CLI installed:
+
+```yaml
+claimy_check:
+  variables:
+    CLAIMY_URL: "https://claimy.example.com"
+  id_tokens:
+    CLAIMY_ID_TOKEN:
+      aud: "https://claimy.example.com"
+  script:
+    - claimy query --group payments --environments sandbox
+```
+
+Configure `claimy.auth.gitlab.issuer` and `jwks_url` for the trusted GitLab instance.
+Set `claimy.auth.gitlab.audience` to the exact `aud` value requested by the job.
+Claimy verifies the signed token, its expiry, stable user/project/job IDs, and the user's email against `claimy.auth.team_domain`.
+Use `id_tokens`, not `CI_JOB_TOKEN`.
+The CLI sends the token from `CLAIMY_ID_TOKEN` as a bearer credential.
+A global `--token-file` takes precedence over that environment variable.
+CI does not use the browser-login configuration or the OS credential store.
+GitHub Actions OIDC is not supported by the current GitLab verifier.
+
+For deployment jobs, acquire with `claimy acquire --output id`, proceed only on exit code `0`, and retain the exact claim ID for release.
+Use separate stable request IDs for acquisition and release.
+Replay is scoped to the GitLab issuer, project, and job; a GitLab job retry has a new job identity.
+The token cannot be refreshed by the CLI and must still be valid when release runs.
+Claim expiry is the fallback for interrupted jobs or expired tokens.
+Claims belong to the GitLab user's canonical email.
+Jobs for the same user do not conflict with each other's claims; this is not a strict per-job mutex.
+
 Use [scripts/ci-acquire.sh](scripts/ci-acquire.sh) and [scripts/ci-release.sh](scripts/ci-release.sh).
+The shell helpers remain available as an alternative to the CLI.
 [scripts/gitlab-claim-example.yml](scripts/gitlab-claim-example.yml) shows ID-token and completion-cleanup configuration.
 
 Set `CLAIMY_URL`, `CLAIMY_ID_TOKEN`, `CLAIMY_GROUP`, `CLAIMY_REQUEST_ID`, and `CLAIMY_ENVIRONMENTS`.
@@ -487,11 +519,10 @@ Replace them before deployment.
 Do not commit local configuration or credentials.
 
 Use a dedicated MySQL database with InnoDB and enforced `CHECK` constraints.
-The tested baseline is MySQL 8.0.42.
-Claimy requires at least 8.0.16.
-Set `claimy.mysql_version` to the exact supported server version.
-The SQLC connection must use `loc: UTC` and `time_zone: "'+00:00'"`.
-Runtime startup rejects an unexpected server version, non-UTC session, or incomplete InnoDB schema.
+Claimy requires MySQL 8.0.16 or later; MariaDB is not supported.
+Later MySQL releases are accepted and do not need to match the integration test's 8.0.42 patch.
+The SQLC connection must use `loc: UTC` and `time_zone: "'+00:00'".
+Runtime startup rejects MariaDB, MySQL versions older than 8.0.16, non-UTC sessions, or an incomplete InnoDB schema.
 
 Apply migrations explicitly to the selected database:
 

@@ -23,11 +23,10 @@ import (
 	"github.com/justtrackio/gosoline/pkg/log"
 )
 
-// Settings configures the database baseline and identity adapters.
+// Settings configures the identity adapters.
 type Settings struct {
-	MySQLVersion string        `cfg:"mysql_version" default:"8.0.42"`
-	Auth         auth.Settings `cfg:"auth"`
-	Chat         chat.Settings `cfg:"chat"`
+	Auth auth.Settings `cfg:"auth"`
+	Chat chat.Settings `cfg:"chat"`
 }
 
 // Runtime shares the initialized adapters and SQLC client.
@@ -52,7 +51,7 @@ func Provide(ctx context.Context, config cfg.Config, logger log.Logger) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("initialize claim database: %w", err)
 		}
-		if err = verifyServer(ctx, database.SQLDB(), settings.MySQLVersion); err != nil {
+		if err = verifyServer(ctx, database.SQLDB()); err != nil {
 			return nil, errors.Join(err, database.Close())
 		}
 		client, err := sqlc.ProvideClient(ctx, config, logger, "default")
@@ -80,19 +79,13 @@ func Provide(ctx context.Context, config cfg.Config, logger log.Logger) (*Runtim
 	})
 }
 
-func verifyServer(ctx context.Context, database *sql.DB, expectedVersion string) error {
+func verifyServer(ctx context.Context, database *sql.DB) error {
 	var version string
 	if err := database.QueryRowContext(ctx, "SELECT VERSION()").Scan(&version); err != nil {
 		return fmt.Errorf("read MySQL version: %w", err)
 	}
-	actual := strings.SplitN(version, "-", 2)[0]
-	if strings.Contains(strings.ToLower(version), "mariadb") || actual != expectedVersion {
-		return fmt.Errorf("MySQL version %s does not match configured baseline %s", actual, expectedVersion)
-	}
-	var major, minor, patch int
-	if n, err := fmt.Sscanf(actual, "%d.%d.%d", &major, &minor, &patch); err != nil || n != 3 ||
-		major < 8 || (major == 8 && minor == 0 && patch < 16) {
-		return fmt.Errorf("MySQL 8.0.16 or later is required for enforced CHECK constraints")
+	if err := verifyMySQLVersion(version); err != nil {
+		return err
 	}
 	var sessionZone string
 	if err := database.QueryRowContext(ctx, "SELECT @@session.time_zone").Scan(&sessionZone); err != nil {
@@ -100,6 +93,20 @@ func verifyServer(ctx context.Context, database *sql.DB, expectedVersion string)
 	}
 	if sessionZone != "+00:00" {
 		return fmt.Errorf("database session timezone must be +00:00")
+	}
+
+	return nil
+}
+
+func verifyMySQLVersion(version string) error {
+	actual := strings.SplitN(version, "-", 2)[0]
+	if strings.Contains(strings.ToLower(version), "mariadb") {
+		return fmt.Errorf("MariaDB is not supported")
+	}
+	var major, minor, patch int
+	if n, err := fmt.Sscanf(actual, "%d.%d.%d", &major, &minor, &patch); err != nil || n != 3 ||
+		major < 8 || (major == 8 && minor == 0 && patch < 16) {
+		return fmt.Errorf("MySQL 8.0.16 or later is required for enforced CHECK constraints")
 	}
 
 	return nil

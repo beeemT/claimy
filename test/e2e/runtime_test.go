@@ -1056,7 +1056,6 @@ sqlc:
       path: build/migrations/claimy
 
 claimy:
-  mysql_version: "8.0.42"
   auth:
     team_domain: %s
     rest:
