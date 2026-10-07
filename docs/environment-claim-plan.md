@@ -174,7 +174,9 @@ Repository permissions are `contents: read`; Docker Hub authentication uses its 
 There are no private pipeline includes, private base images, or automatic deployments.
 Repository publishing CI is separate from GitLab job-identity support in the claim API.
 The image includes the binary, safe configuration, migrations, CA certificates, and embedded Berlin timezone data.
-Helm, protobuf, and GitOps tools remain conditional on real deployment or generation requirements.
+The planned Helm chart will include a ClusterIP Service for in-cluster access.
+It will not create Ingress, NetworkPolicy, or TLS resources.
+Helm is not implemented yet; protobuf and GitOps tools remain conditional on real requirements.
 Codegraph and Git-work are optional local tools, not CI prerequisites.
 
 ### Docker Hub publishing
@@ -395,9 +397,9 @@ It must not cascade-delete an active claim or a version needed for an in-retenti
 ## MySQL schema
 
 Use InnoDB, UTC `DATETIME(6)` values, foreign keys with `ON DELETE RESTRICT`, and explicit Goose SQL migrations.
-Require MySQL 8.0.16 or later to enforce `CHECK` constraints.
-Configure and verify the production server version.
-Use the same version for isolated integration tests.
+Require MySQL 8.0.16 or later to enforce `CHECK` constraints; MariaDB is not supported.
+Runtime startup enforces this minimum and UTC sessions without requiring production to match the integration-test patch release.
+Disposable integration fixtures use MySQL 8.0.42.
 The app owns canonical slug and email normalization.
 
 The schema below is a proposed contract, not an existing implementation.
@@ -647,7 +649,7 @@ Concurrency tests must use independent DB connections and barriers to prove the 
 ## Implementation sequence
 
 1. **Public setup and tooling.** Public modules, safe examples, pinned tools, generators, hooks, Docker, and CI are implemented. The MIT license is unchanged.
-2. **Bootstrap and deployment contract.** Runtime initialization checks MySQL version, UTC sessions, and the six InnoDB tables. Goose applies explicit migrations. Authenticated routes share one SQLC runtime. Database shutdown follows HTTP drain.
+2. **Bootstrap and deployment contract.** Runtime initialization requires MySQL 8.0.16 or later, UTC sessions, and the six InnoDB tables; MariaDB is not supported. Goose applies explicit migrations. Authenticated routes share one SQLC runtime. Database shutdown follows HTTP drain.
 3. **Schema and transactional core.** Six tables, permanent group locks, operation-time acquisition, atomic environments, conflict checks, and global idempotency are implemented. Independent-pool barrier tests cover the races and rollback.
 4. **Lifecycle and temporal reads.** Release, revision-checked expiry changes, immutable versions, current/history/projection queries, and terminal-time retention are implemented. Expired claims cannot be revived.
 5. **REST and CI identity.** Generated typed requests, read-only SQLH catalogs, signed GitLab identity, and one-shot shell callers are implemented. Registered-route tests use real MySQL and signed tokens.
@@ -692,7 +694,7 @@ Never point concurrency or failure-injection tests at a shared database.
 
 The local fixtures do not establish a live GitLab or Google Chat deployment.
 Production and staged configuration must supply the actual trusted issuers, exact audiences, team domain, and allowed space names.
-MySQL must use InnoDB, enforce checks, match the configured supported baseline, and provide UTC operation time.
+MySQL must be 8.0.16 or later, use InnoDB, enforce checks, and provide UTC operation time; MariaDB is not supported.
 The binary includes Berlin timezone data.
 GitLab must supply the supported stable user, project, and job identity claims.
 Chat must provide an authenticated human email and use the public endpoint audience.
