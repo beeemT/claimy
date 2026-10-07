@@ -212,6 +212,8 @@ Mise pins Go, gofumpt, golangci-lint, Prek, Gitleaks, Mockery, gotempl, oapi-cod
 Run `mise run generate` after generator input changes.
 `generate-check` rejects tracked and untracked generated drift.
 `version-check` compares Go, template/code generators, Mockery, and Goose module/tool versions.
+CodeRabbit review settings and path-specific contract guidance are in [.coderabbit.yaml](.coderabbit.yaml).
+Automatic incremental reviews apply to non-draft pull requests; review settings do not change merge requirements.
 
 ```sh
 mise run check
