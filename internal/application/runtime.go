@@ -80,16 +80,15 @@ func Provide(ctx context.Context, config cfg.Config, logger log.Logger) (*Runtim
 }
 
 func provideDatabaseAndClient(ctx context.Context, config cfg.Config, logger log.Logger) (*sqlc.DB, sqlc.Client, error) {
-	databasePassword, hasDatabasePassword := os.LookupEnv(databasePasswordEnv)
+	_, hasDatabasePassword := os.LookupEnv(databasePasswordEnv)
 	var (
 		database         *sqlc.DB
 		databaseSettings *sqlc.Settings
 		err              error
 	)
 	if hasDatabasePassword {
-		databaseSettings, err = sqlc.ReadSettings(config, "default")
+		databaseSettings, err = effectiveDatabaseSettings(config)
 		if err == nil {
-			databaseSettings.Uri.Password = databasePassword
 			database, err = sqlc.ProvideDBFromSettings(ctx, logger, "default", databaseSettings)
 		}
 	} else {
@@ -113,6 +112,18 @@ func provideDatabaseAndClient(ctx context.Context, config cfg.Config, logger log
 	}
 
 	return database, client, nil
+}
+
+func effectiveDatabaseSettings(config cfg.Config) (*sqlc.Settings, error) {
+	settings, err := sqlc.ReadSettings(config, "default")
+	if err != nil {
+		return nil, err
+	}
+	if password, ok := os.LookupEnv(databasePasswordEnv); ok {
+		settings.Uri.Password = password
+	}
+
+	return settings, nil
 }
 
 func verifyServer(ctx context.Context, database *sql.DB) error {

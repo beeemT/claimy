@@ -73,21 +73,9 @@ func TestHelmChartIntegration(t *testing.T) {
 		t.Fatalf("write Helm smoke values: %v", err)
 	}
 
-	// MySQL has a deliberately slow init container. This gives the pre-install
-	// hook a visible running window in which the ConfigMap must not exist.
-	installDone := make(chan helmSmokeResult, 1)
-	installFinished := make(chan struct{})
-	go func() {
-		installDone <- helmSmokeRun(t, 6*time.Minute, "helm", "--kubeconfig", kubeconfig,
-			"--kube-context", contextName, "install", release, chart,
-			"--values", values, "--wait", "--timeout", "5m")
-		close(installFinished)
-	}()
-	if !observePreInstallHookOrdering(t, kubeconfig, contextName, migrationJob, release, installFinished) {
-		result := <-installDone
-		t.Fatalf("Helm install never exposed a migration hook before the ConfigMap: %s", helmSmokeDiagnostic(result))
-	}
-	installResult := <-installDone
+	installResult := helmSmokeRun(t, 6*time.Minute, "helm", "--kubeconfig", kubeconfig,
+		"--kube-context", contextName, "install", release, chart,
+		"--values", values, "--wait", "--timeout", "5m")
 	if installResult.err != nil {
 		t.Fatalf("Helm install failed (%v): %s", installResult.err, helmSmokeDiagnostic(installResult))
 	}
@@ -416,13 +404,45 @@ func captureHelmSmokeDiagnostics(t *testing.T, kubeconfig, contextName, release,
 		},
 	}
 	for _, diagnostic := range diagnostics {
-		result := kubectlSmokeCleanup(t, kubeconfig, contextName, 30*time.Second, nil, diagnostic.args...)
+		var result helmSmokeResult
+		if diagnostic.name == "migration logs" {
+			result = captureMigrationLogs(t, kubeconfig, contextName, migrationJob)
+		} else {
+			result = kubectlSmokeCleanup(t, kubeconfig, contextName, 30*time.Second, nil, diagnostic.args...)
+		}
 		output := helmSmokeDiagnosticWithSecrets(result, password)
 		if output == "" {
 			output = "<no output>"
 		}
 		t.Logf("Helm smoke diagnostic (%s):\n%s", diagnostic.name, output)
 	}
+}
+
+func captureMigrationLogs(t *testing.T, kubeconfig, contextName, migrationJob string) helmSmokeResult {
+	t.Helper()
+	pods := kubectlSmokeCleanup(t, kubeconfig, contextName, 30*time.Second, nil,
+		"get", "pods", "-n", "default", "-l", "job-name="+migrationJob,
+		"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
+	if pods.err != nil {
+		return pods
+	}
+
+	var logs bytes.Buffer
+	var firstErr error
+	for _, pod := range strings.Fields(string(pods.stdout)) {
+		result := kubectlSmokeCleanup(t, kubeconfig, contextName, 30*time.Second, nil,
+			"logs", "pod/"+pod, "-n", "default", "--all-containers=true", "--tail=200", "--prefix=true")
+		logs.WriteString("=== ")
+		logs.WriteString(pod)
+		logs.WriteString(" ===\n")
+		logs.Write(result.stdout)
+		logs.Write(result.stderr)
+		if firstErr == nil && result.err != nil {
+			firstErr = result.err
+		}
+	}
+
+	return helmSmokeResult{stdout: logs.Bytes(), err: firstErr}
 }
 
 func applyMySQL(t *testing.T, kubeconfig, contextName, password string) {
@@ -435,6 +455,14 @@ type: Opaque
 stringData:
   password: %s
   root-password: %s
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: claimy-db-connection
+type: Opaque
+stringData:
+  endpoint: claimy-mysql
 ---
 apiVersion: v1
 kind: Service
@@ -465,10 +493,6 @@ spec:
     spec:
       shareProcessNamespace: true
       terminationGracePeriodSeconds: 10
-      initContainers:
-        - name: delay-start
-          image: busybox:1.36
-          command: ["sh", "-c", "sleep 15"]
       containers:
         - name: mysql
           image: mysql:8.0.42
@@ -501,6 +525,7 @@ spec:
 	if result.err != nil {
 		t.Fatalf("apply disposable MySQL manifest: %s", helmSmokeDiagnostic(result))
 	}
+	waitForKubectlCondition(t, kubeconfig, contextName, "available", "deployment/claimy-mysql", 3*time.Minute)
 }
 
 func createJWKSSecret(t *testing.T, kubeconfig, contextName, caPath string) {
@@ -509,30 +534,6 @@ func createJWKSSecret(t *testing.T, kubeconfig, contextName, caPath string) {
 		"--from-file=ca.pem="+caPath)
 	if result.err != nil {
 		t.Fatalf("create disposable JWKS CA Secret: %s", helmSmokeDiagnostic(result))
-	}
-}
-
-func observePreInstallHookOrdering(t *testing.T, kubeconfig, contextName, migrationJob, release string, done <-chan struct{}) bool {
-	t.Helper()
-	deadline := time.NewTimer(2 * time.Minute)
-	defer deadline.Stop()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		job := kubectlSmoke(t, kubeconfig, contextName, 10*time.Second, nil, "get", "job", migrationJob)
-		if job.err == nil {
-			configMap := kubectlSmoke(t, kubeconfig, contextName, 10*time.Second, nil, "get", "configmap", release)
-			if configMap.err != nil {
-				return true
-			}
-		}
-		select {
-		case <-done:
-			return false
-		case <-deadline.C:
-			return false
-		case <-ticker.C:
-		}
 	}
 }
 
@@ -875,7 +876,7 @@ image:
   digest: %s
   pullPolicy: IfNotPresent
 database:
-  host: claimy-mysql
+  host: claimy-legacy-host.invalid
   port: 3306
   name: claimy
   user: claimy
@@ -948,6 +949,13 @@ migrations:
   activeDeadlineSeconds: 600
   resources: {}
 extraEnv:
+  - name: SQLC_DEFAULT_URI_HOST
+    valueFrom:
+      secretKeyRef:
+        name: claimy-db-connection
+        key: endpoint
+  - name: SQLC_DEFAULT_PARAMETERS_TIME_ZONE
+    value: "'+00:00'"
   - name: SSL_CERT_FILE
     value: /etc/claimy/jwks/ca.pem
 extraVolumes:

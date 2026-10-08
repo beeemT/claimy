@@ -1,13 +1,4 @@
 {{- if .Values.migrations.enabled }}
-{{- $queryParts := list }}
-{{- range $key, $value := .Values.database.parameters }}
-{{- $queryParts = append $queryParts (printf "%s=%s" (urlquery $key) (urlquery (toString $value))) }}
-{{- end }}
-{{- $query := join "&" $queryParts }}
-{{- $dsn := printf "%s:$(MYSQL_PASSWORD)@tcp(%s:%d)/%s" .Values.database.user .Values.database.host (int .Values.database.port) .Values.database.name }}
-{{- if $query }}
-{{- $dsn = printf "%s?%s" $dsn $query }}
-{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -38,35 +29,35 @@ spec:
           image: {{ include "claimy-chart.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
-            - /app/goose
+            - /app/claimy
           args:
-            - -dir
-            - /app/build/migrations/claimy
-            - up
+            - migrate
           env:
-            - name: MYSQL_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.database.existingSecret | quote }}
-                  key: {{ include "claimy-chart.passwordKey" . }}
-            - name: GOOSE_DRIVER
-              value: mysql
-            - name: GOOSE_DBSTRING
-              value: {{ $dsn | quote }}
+            {{- include "claimy-chart.runtimeEnv" . | nindent 12 }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           {{- with .Values.migrations.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.extraVolumeMounts }}
           volumeMounts:
+            - name: config
+              mountPath: /app/config.dist.yml
+              subPath: config.dist.yml
+              readOnly: true
+            {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.extraVolumes }}
+            {{- end }}
       volumes:
+        - name: config
+          configMap:
+            name: {{ include "claimy-chart.migrationConfigName" . }}
+            items:
+              - key: config.dist.yml
+                path: config.dist.yml
+        {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

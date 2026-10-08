@@ -58,9 +58,7 @@
       "required": ["host", "port", "name", "user", "existingSecret", "passwordKey", "parameters"],
       "properties": {
         "host": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$"
+          "type": "string"
         },
         "port": {
           "type": "integer",
@@ -145,13 +143,17 @@
               "type": "object",
               "required": ["team_domain", "rest", "gitlab", "chat", "cli"],
               "properties": {
-                "team_domain": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 253,
-                  "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$"
+                "team_domain": {"type": "string"},
+                "rest": {
+                  "type": "object",
+                  "required": ["issuer", "audience", "jwks_url"],
+                  "properties": {
+                    "issuer": {"type": "string", "minLength": 1, "pattern": "^https://[^\\s]+$"},
+                    "audience": {"type": "string"},
+                    "jwks_url": {"type": "string", "minLength": 1, "pattern": "^https://[^\\s]+$"}
+                  },
+                  "additionalProperties": true
                 },
-                "rest": {"$ref": "#/definitions/issuerSettings"},
                 "gitlab": {"$ref": "#/definitions/issuerSettings"},
                 "chat": {
                   "allOf": [
@@ -183,14 +185,9 @@
               "type": "object",
               "required": ["app_identity", "allowed_spaces", "deadline"],
               "properties": {
-                "app_identity": {"type": "string", "minLength": 1},
+                "app_identity": {"type": "string"},
                 "allowed_spaces": {
-                  "type": "array",
-                  "minItems": 1,
-                  "items": {
-                    "type": "string",
-                    "pattern": "^spaces/[A-Za-z0-9_-]+$"
-                  }
+                  "type": "array"
                 },
                 "deadline": {
                   "type": "string",
@@ -228,11 +225,287 @@
       },
       "additionalProperties": false
     },
+    "deploymentAnnotations": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "extraEnv": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/envVar"}
+    },
     "terminationGracePeriodSeconds": {
       "type": "integer",
       "minimum": 75
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "required": ["database"],
+        "properties": {
+          "database": {
+            "required": ["host"],
+            "properties": {"host": {"const": ""}}
+          }
+        }
+      },
+      "then": {
+        "required": ["extraEnv"],
+        "properties": {
+          "extraEnv": {
+            "contains": {
+              "allOf": [
+                {"$ref": "#/definitions/envVar"},
+                {"$ref": "#/definitions/secretSourcedEnvVar"},
+                {"properties": {"name": {"const": "SQLC_DEFAULT_URI_HOST"}}, "required": ["name"]}
+              ]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "database": {
+            "properties": {
+              "host": {
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["config"],
+        "properties": {
+          "config": {
+            "required": ["claimy"],
+            "properties": {
+              "claimy": {
+                "required": ["auth"],
+                "properties": {
+                  "auth": {
+                    "required": ["team_domain"],
+                    "properties": {"team_domain": {"const": ""}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["extraEnv"],
+        "properties": {
+          "extraEnv": {
+            "contains": {
+              "allOf": [
+                {"$ref": "#/definitions/envVar"},
+                {"$ref": "#/definitions/secretSourcedEnvVar"},
+                {"properties": {"name": {"const": "CLAIMY_AUTH_TEAM_DOMAIN"}}, "required": ["name"]}
+              ]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "config": {
+            "properties": {
+              "claimy": {
+                "properties": {
+                  "auth": {
+                    "properties": {
+                      "team_domain": {
+                        "minLength": 1,
+                        "maxLength": 253,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["config"],
+        "properties": {
+          "config": {
+            "required": ["claimy"],
+            "properties": {
+              "claimy": {
+                "required": ["auth"],
+                "properties": {
+                  "auth": {
+                    "required": ["rest"],
+                    "properties": {
+                      "rest": {
+                        "required": ["audience"],
+                        "properties": {"audience": {"const": ""}}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["extraEnv"],
+        "properties": {
+          "extraEnv": {
+            "contains": {
+              "allOf": [
+                {"$ref": "#/definitions/envVar"},
+                {"$ref": "#/definitions/secretSourcedEnvVar"},
+                {"properties": {"name": {"const": "CLAIMY_AUTH_REST_AUDIENCE"}}, "required": ["name"]}
+              ]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "config": {
+            "properties": {
+              "claimy": {
+                "properties": {
+                  "auth": {
+                    "properties": {
+                      "rest": {
+                        "properties": {
+                          "audience": {
+                            "minLength": 1,
+                            "maxLength": 1024,
+                            "pattern": "^[^\\x00-\\x20\\x7f]+$"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["config"],
+        "properties": {
+          "config": {
+            "required": ["claimy"],
+            "properties": {
+              "claimy": {
+                "required": ["chat"],
+                "properties": {
+                  "chat": {
+                    "required": ["app_identity"],
+                    "properties": {"app_identity": {"const": ""}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["extraEnv"],
+        "properties": {
+          "extraEnv": {
+            "contains": {
+              "allOf": [
+                {"$ref": "#/definitions/envVar"},
+                {"$ref": "#/definitions/secretSourcedEnvVar"},
+                {"properties": {"name": {"const": "CLAIMY_CHAT_APP_IDENTITY"}}, "required": ["name"]}
+              ]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "config": {
+            "properties": {
+              "claimy": {
+                "properties": {
+                  "chat": {
+                    "properties": {"app_identity": {"minLength": 1}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["config"],
+        "properties": {
+          "config": {
+            "required": ["claimy"],
+            "properties": {
+              "claimy": {
+                "required": ["chat"],
+                "properties": {
+                  "chat": {
+                    "required": ["allowed_spaces"],
+                    "properties": {"allowed_spaces": {"maxItems": 0}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["extraEnv"],
+        "properties": {
+          "extraEnv": {
+            "contains": {
+              "allOf": [
+                {"$ref": "#/definitions/envVar"},
+                {"$ref": "#/definitions/secretSourcedEnvVar"},
+                {"properties": {"name": {"const": "CLAIMY_CHAT_ALLOWED_SPACES"}}, "required": ["name"]}
+              ]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "config": {
+            "properties": {
+              "claimy": {
+                "properties": {
+                  "chat": {
+                    "properties": {
+                      "allowed_spaces": {
+                        "minItems": 1,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^spaces/[A-Za-z0-9_-]+$"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "definitions": {
     "issuerSettings": {
       "type": "object",
@@ -256,6 +529,91 @@
         }
       },
       "additionalProperties": true
+    },
+    "keySelector": {
+      "type": "object",
+      "required": ["name", "key"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "key": {"type": "string", "minLength": 1},
+        "optional": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "requiredKeySelector": {
+      "type": "object",
+      "required": ["name", "key"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "key": {"type": "string", "minLength": 1},
+        "optional": {"type": "boolean", "const": false}
+      },
+      "additionalProperties": false
+    },
+    "envVar": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[-._A-Za-z][-._A-Za-z0-9]*$"
+        },
+        "value": {"type": "string"},
+        "valueFrom": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1,
+          "properties": {
+            "secretKeyRef": {"$ref": "#/definitions/keySelector"},
+            "configMapKeyRef": {"$ref": "#/definitions/keySelector"},
+            "fieldRef": {
+              "type": "object",
+              "required": ["fieldPath"],
+              "properties": {
+                "apiVersion": {"type": "string"},
+                "fieldPath": {"type": "string", "minLength": 1}
+              },
+              "additionalProperties": false
+            },
+            "resourceFieldRef": {
+              "type": "object",
+              "required": ["resource"],
+              "properties": {
+                "containerName": {"type": "string", "minLength": 1},
+                "divisor": {"type": "string", "minLength": 1},
+                "resource": {"type": "string", "minLength": 1}
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "not": {
+        "required": ["value", "valueFrom"],
+        "properties": {"value": {"minLength": 1}}
+      }
+    },
+    "secretSourcedEnvVar": {
+      "type": "object",
+      "required": ["valueFrom"],
+      "properties": {
+        "valueFrom": {
+          "type": "object",
+          "anyOf": [
+            {
+              "required": ["secretKeyRef"],
+              "properties": {"secretKeyRef": {"$ref": "#/definitions/requiredKeySelector"}}
+            },
+            {
+              "required": ["configMapKeyRef"],
+              "properties": {"configMapKeyRef": {"$ref": "#/definitions/requiredKeySelector"}}
+            }
+          ]
+        }
+      }
     }
   }
 }

@@ -288,6 +288,10 @@ An explicit client command replaces that default.
 The scratch image has no browser or credential-store service.
 Use an environment token or token file there.
 
+The Helm chart uses the image's `claimy migrate` command in a pre-install or
+pre-upgrade job. It reads the same SQLC configuration and raw
+`CLAIMY_DATABASE_PASSWORD` as the API; do not configure a separate Goose DSN.
+
 ## Browser login and keychain
 
 ```sh

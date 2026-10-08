@@ -1,10 +1,11 @@
 # Claimy Helm chart
 
 This chart deploys the Claimy HTTP service and its pre-install/pre-upgrade
-Goose migration Job. It owns one Deployment, one ClusterIP Service, one
-ConfigMap, and the migration Job. MySQL, credentials, ingress, TLS
-termination, NetworkPolicy, and any other network resource remain the
-responsibility of the operator.
+Goose migration Job. It owns one Deployment, one ClusterIP Service, and one
+runtime ConfigMap. When migrations are enabled, it also creates a pre-install
+hook ConfigMap that remains until the next migration hook. MySQL, credentials,
+ingress, TLS termination, NetworkPolicy, and other network resources remain
+the responsibility of the operator.
 
 The chart is named `claimy-chart`. The Docker image is `beeemt/claimy`; the
 chart is published separately as the OCI artifact `beeemt/claimy-chart` so
@@ -12,8 +13,8 @@ chart versions never overwrite image tags.
 
 ## Required configuration
 
-The chart intentionally has no usable identity-provider defaults. Set all of
-the blank values in `values.yaml`, especially:
+The chart intentionally has no usable identity-provider defaults. Configure
+all required database and identity-provider settings:
 
 - `database.host`, `database.port`, `database.name`, and `database.user`;
 - `database.existingSecret` and `database.passwordKey`;
@@ -21,6 +22,23 @@ the blank values in `values.yaml`, especially:
 - `config.claimy.auth.rest`, `.gitlab`, and `.chat` issuer, audience, and
   `jwks_url` values; and
 - `config.claimy.chat.app_identity`, `allowed_spaces`, and `deadline`.
+
+The five fields sourced from Operations metadata may be left at their empty
+defaults only when `extraEnv` provides the matching environment variable from
+a required `secretKeyRef` or `configMapKeyRef`:
+
+| Value field | Environment variable |
+| --- | --- |
+| `database.host` | `SQLC_DEFAULT_URI_HOST` |
+| `config.claimy.auth.team_domain` | `CLAIMY_AUTH_TEAM_DOMAIN` |
+| `config.claimy.auth.rest.audience` | `CLAIMY_AUTH_REST_AUDIENCE` |
+| `config.claimy.chat.app_identity` | `CLAIMY_CHAT_APP_IDENTITY` |
+| `config.claimy.chat.allowed_spaces` | `CLAIMY_CHAT_ALLOWED_SPACES` |
+
+Each reference must have a non-empty `name` and `key`; `optional: true` is not
+accepted. The chart validates the reference shape, not whether the Secret or
+ConfigMap exists or contains valid runtime data. Claimy validates the fetched
+values when it starts.
 
 The `config` value uses Claimy's existing `config.dist.yml` shape. Configure
 `config.claimy.auth.*` and `config.claimy.chat.*` in that map; do not create a
@@ -30,34 +48,46 @@ accepted configuration fields. Browser CLI login is disabled by default at
 `config.claimy.auth.cli.enabled: false`. Enable it only after supplying the
 public client metadata required by Claimy.
 
-The chart overlays the following fields and does not allow the runtime YAML
-to disagree with chart values:
+The chart overlays the following fields in the shared runtime configuration:
 
 - `httpserver.default.port` comes from `service.port` (8088 by default);
 - `httpserver.default.timeout.drain` and `.timeout.shutdown` are fixed at
   5s and 60s, respectively, while `kernel.kill_timeout` is fixed at 70s;
 - `sqlc.default.uri.host`, `port`, `user`, and `database` come from
   `database.*`;
-- `sqlc.default.parameters` comes from `database.parameters`; required values
-  are `loc: UTC`, `time_zone: "'+00:00'"`, and `parseTime: "true"`. The schema
-  prevents overriding these because Claimy requires UTC database sessions and
-  Goose needs native MySQL time scanning; and
+- `sqlc.default.parameters` comes from `database.parameters`; the schema
+  requires `loc: UTC`, `time_zone: "'+00:00'"`, and `parseTime: "true"` in
+  values files; and
 - `sqlc.default.migrations.enabled` is always `false` because the hook owns
   migrations.
 
-The database password is never put in a values file or ConfigMap. In the
-server Pod, `CLAIMY_DATABASE_PASSWORD` reads the password from the pre-existing
-Secret. Claimy's runtime applies this raw value as the database credential
-after loading the ordinary settings, so brace characters are not interpolated.
-The Secret value is never rendered into the ConfigMap.
+The chart's `extraEnv` entries are passed, in order, to both the API
+Deployment and migration Job after the database password Secret reference.
+Gosoline applies those environment overrides to the loaded `config.dist.yml`
+settings, including SQLC URI fields and existing query-parameter keys. Keep
+the effective SQLC `loc`, `time_zone`, and `parseTime` values compatible with
+Claimy's UTC sessions and native MySQL time scanning.
 
-The migration Job reads the same Secret into `MYSQL_PASSWORD` before
-constructing `GOOSE_DBSTRING` by Kubernetes environment expansion. The
-password is not placed in process arguments and no shell is used. DSN query
-parameter keys and values in `database.parameters` are URL-encoded for Goose.
-Database host, user, and name are constrained by the values schema to ordinary
-DSN-safe forms; use a DNS name rather than embedding protocol or credentials
-in `database.host`.
+For example, `SQLC_DEFAULT_PARAMETERS_TIME_ZONE` overrides the existing
+`time_zone` key. Supply the raw SQL string literal `'+00:00'`, including its
+single quotes. SQLC's driver URL-escapes it when formatting the Goose
+connection string, so do not pre-URL-encode it.
+
+The database password is never put in a values file or ConfigMap. Both
+containers read it from `CLAIMY_DATABASE_PASSWORD`; Claimy applies this raw
+value after loading SQLC settings so brace characters are not interpolated.
+The ordinary ConfigMap and the pre-install/pre-upgrade hook ConfigMap are
+rendered by the same helper and use the same mounted path,
+`/app/config.dist.yml`.
+
+The migration Job runs `/app/claimy migrate`. That adapter reads the same
+effective SQLC settings as the API, overlays the raw password, and asks the
+pinned SQLC MySQL driver to format the DSN. Charset, collation, connection
+timeouts, runtime query parameters, and special-character escaping therefore
+come from the same settings rather than a chart-built DSN. The DSN is passed
+only to the child Goose process through its environment, never as a process
+argument; the adapter redacts the DSN and password from Goose output. No shell
+is used.
 
 ## Create the database Secret
 
@@ -85,11 +115,21 @@ unset CLAIMY_DB_PASSWORD
 ```
 
 Set `database.existingSecret: claimy-db` and
-`database.passwordKey: password`. The chart does not create, update, or delete
-this Secret. The Secret must be in the same Kubernetes namespace as the Helm
-release; pass `--namespace` consistently to Secret creation and Helm commands.
-Changing the Secret does not update running Pods; roll out/restart the
-Deployment after password rotation so all replicas use the new credential.
+`database.passwordKey: password`. The Secret must exist in the same Kubernetes
+namespace as the Helm release; pass `--namespace` consistently to Secret
+creation and Helm commands. The chart does not create, update, or delete this
+Secret. Changing it does not update running Pods by itself. If a
+namespace-scoped Reloader is installed, use `deploymentAnnotations` to add its
+Secret watch annotation; otherwise roll out/restart the Deployment after
+password rotation.
+
+For a namespace-scoped Stakater Reloader, place its watch annotation on the
+Deployment metadata (not `podAnnotations`):
+
+```yaml
+deploymentAnnotations:
+  secret.reloader.stakater.com/reload: "claimy-db,claimy-auth-metadata,claimy-cluster-connection"
+```
 
 ## Install, upgrade, and rollback
 
@@ -116,7 +156,7 @@ From the published chart OCI repository:
 ```sh
 helm install claimy \
   oci://registry-1.docker.io/beeemt/claimy-chart \
-  --version 0.1.0 \
+  --version 0.0.2 \
   -f claimy-values.yaml \
   --wait --timeout 10m
 ```
@@ -127,11 +167,14 @@ repository. Helm rollback changes the workload and ConfigMap back to an older
 release; it does **not** reverse SQL migrations already applied to MySQL.
 
 The migration Job runs as a Helm `pre-install,pre-upgrade` hook using the same
-MySQL settings and Secret as the server. Successful hook Jobs are deleted;
-failed Jobs are retained for diagnosis. A failed migration blocks the install
-or upgrade and no new application rollout is considered successful. Set
-`migrations.enabled: false` only when migrations are applied by a separately
-controlled process.
+runtime settings, environment, and Secret as the server. A pre-install hook
+ConfigMap with weight `-10` makes the shared configuration available before
+the Job (weight `-5`); that hook ConfigMap remains until the next pre-install
+or pre-upgrade, when `before-hook-creation` replaces it. Successful hook Jobs
+are deleted; failed Jobs are retained for diagnosis. A failed migration blocks
+the install or upgrade and no new application rollout is considered successful.
+Set `migrations.enabled: false` only when migrations are applied by a
+separately controlled process.
 
 Migrations can acquire MySQL metadata or table locks. Run only one install or
 upgrade against a database at a time, and schedule schema-changing upgrades
