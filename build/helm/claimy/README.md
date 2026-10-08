@@ -69,8 +69,9 @@ the effective SQLC `loc`, `time_zone`, and `parseTime` values compatible with
 Claimy's UTC sessions and native MySQL time scanning.
 
 For example, `SQLC_DEFAULT_PARAMETERS_TIME_ZONE` overrides the existing
-`time_zone` key. Supply its value as raw `+00:00`; SQLC's driver escapes it
-when formatting the Goose connection string, so do not pre-URL-encode it.
+`time_zone` key. Supply the raw SQL string literal `'+00:00'`, including its
+single quotes. SQLC's driver URL-escapes it when formatting the Goose
+connection string, so do not pre-URL-encode it.
 
 The database password is never put in a values file or ConfigMap. Both
 containers read it from `CLAIMY_DATABASE_PASSWORD`; Claimy applies this raw
