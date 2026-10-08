@@ -3,8 +3,8 @@ package login
 import (
 	"context"
 	"crypto/subtle"
+	_ "embed"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,8 +17,13 @@ import (
 const (
 	maxCallbackQueryBytes  = 4096
 	callbackFailureInvalid = "invalid"
-	callbackResponseBody   = "Authorization callback received. Login is being verified.\n"
 )
+
+//go:embed pages/accepted.html
+var callbackAcceptedPage []byte
+
+//go:embed pages/rejected.html
+var callbackRejectedPage []byte
 
 var callbackServerTimeout = 2 * time.Second
 
@@ -85,11 +90,11 @@ func (callback *callbackListener) handler(expectedState, expectedIssuer string) 
 			return
 		}
 
-		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		response.Header().Set("Content-Length", strconv.Itoa(len(callbackResponseBody)))
+		response.Header().Set("Content-Type", "text/html; charset=utf-8")
+		response.Header().Set("Content-Length", strconv.Itoa(len(callbackAcceptedPage)))
 		response.WriteHeader(http.StatusOK)
 		// A disconnected browser does not invalidate the validated callback.
-		if _, err := fmt.Fprint(response, callbackResponseBody); err == nil {
+		if _, err := response.Write(callbackAcceptedPage); err == nil {
 			if flusher, ok := response.(http.Flusher); ok {
 				flusher.Flush()
 			}
@@ -158,9 +163,10 @@ func callbackResultForQuery(query url.Values, expectedIssuer string) callbackRes
 }
 
 func rejectCallback(response http.ResponseWriter, status int) {
-	response.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	response.Header().Set("Content-Type", "text/html; charset=utf-8")
+	response.Header().Set("Content-Length", strconv.Itoa(len(callbackRejectedPage)))
 	response.WriteHeader(status)
-	if _, err := fmt.Fprintln(response, "This is not a valid login callback. Return to the Claimy CLI."); err != nil {
+	if _, err := response.Write(callbackRejectedPage); err != nil {
 		return
 	}
 }

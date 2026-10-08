@@ -1,4 +1,4 @@
-# Claimy
+![Claimy — Claim it. Do your thing. Let it go.](docs/images/claimy-banner.png)
 
 Claimy coordinates manual, GitLab CI, and Google Chat claims for an app or its whole group in `sandbox`, `prod`, or both.
 Claims start at database operation time and always expire.
@@ -56,7 +56,7 @@ Each archive contains exactly `claimy`, `SKILL.md`, and `LICENSE` at its root.
 The formula installs the executable and the skill.
 It does not configure an agent for you.
 
-## Quick start
+## ![](docs/images/claimy-quick-start.png)Quick start
 
 The commands below use a released CLI and an HTTPS Claimy server.
 Replace the URL, group, and app with values for your environment.
@@ -150,7 +150,7 @@ Do not enable shell tracing while a token is present.
 Do not commit tokens.
 Do not put tokens in source, image layers, or command history.
 
-## Agent skill
+## ![](docs/images/claimy-agent-skill.png)Agent skill
 
 [skills/claimy/SKILL.md](skills/claimy/SKILL.md) is a small, user-installed Agent Skill.
 It describes safe query, atomic acquire, and cleanup behavior.
@@ -194,7 +194,7 @@ The skill's browser-login instruction is for the user.
 An agent must use an existing login or CI token.
 It must not read, print, or extract tokens or keychain entries.
 
-## CLI reference
+## ![](docs/images/claimy-cli.png)CLI reference
 
 Client commands run directly under `claimy`.
 Use `claimy serve` only to start the HTTP service.
@@ -396,7 +396,7 @@ Release failure must not replace the deployment result.
 Expiry handles interrupted jobs.
 Never enable shell tracing around bearer tokens.
 
-## REST API
+## ![](docs/images/claimy-rest-api.png)REST API
 
 [api/openapi.yaml](api/openapi.yaml) is the generated public API specification.
 Its source is `api/openapi.yaml.gotempl` and the YAML fragments under `api/`.
@@ -449,7 +449,7 @@ Use `/ready` for readiness and `/health` for liveness.
 The binary includes Berlin timezone data.
 It handles SIGINT and SIGTERM shutdown.
 
-## API client
+## ![](docs/images/claimy-api-client.png)API client
 
 The public Go client is `github.com/beeemT/claimy/pkg/client`.
 It returns typed responses and structured `*client.APIError` values.
@@ -497,7 +497,7 @@ It never infers intent with NLP.
 Duplicate message delivery returns the saved mutation result.
 Changed intent on the same message returns a conflict.
 
-## Development
+## ![](docs/images/claimy-development.png)Development
 
 Install [Mise](https://mise.jdx.dev/) and Docker.
 Run these commands from the repository root:
@@ -579,7 +579,7 @@ Expose the service through an HTTPS ingress.
 Do not log bearer tokens.
 Keep existing deployment approvals and database backups.
 
-## Checks and container smoke
+## ![](docs/images/claimy-checks.png)Checks and container smoke
 
 Mise pins Go, gofumpt, golangci-lint, Prek, Gitleaks, Mockery, gotempl, oapi-codegen, Goose, actionlint, Helm, kind, and kubectl.
 Run `mise run generate` after generator input changes.

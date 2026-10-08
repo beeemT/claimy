@@ -183,6 +183,8 @@ Complete these steps in Google Chat:
 8. Set `claimy.chat.app_identity` to the configured app identity.
 9. Set `claimy.chat.deadline` to a value from `1ns` through `30s`.
 
+The repository includes a transparent 1254×1254 PNG [Google Chat avatar](google-chat-avatar.png) for copying and uploading. Upload it to a public HTTPS image host, then set its URL in Google Chat API > Configuration > Application info > Avatar URL and save. Claimy does not serve this file automatically. The app avatar is controlled by this Google Cloud configuration, not Claimy's message responses or browser callback favicon. See Google's [Chat API configuration guide](https://developers.google.com/workspace/chat/configure-chat-api).
+
 Google requires a slash command ID from 1 to 1000. Claimy accepts only `MESSAGE` events with a positive `message.slashCommand.commandId`.
 Claimy does not pin the command ID in configuration. It expects the command text to use `/claim`.
 

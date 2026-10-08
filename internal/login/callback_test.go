@@ -20,18 +20,31 @@ func TestCallbackRejectsWrongPathAndStateWithoutConsumingValidCallback(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	closeCallbackResponse(t, response)
-	if response.StatusCode == http.StatusOK {
-		t.Fatal("wrong callback path was accepted")
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("wrong callback path status = %d, want %d", response.StatusCode, http.StatusNotFound)
 	}
+	if got := response.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("wrong callback path content type = %q", got)
+	}
+	closeCallbackResponse(t, response)
 	response, err = client.Get("http://" + callback.listener.Addr().String() + "/callback?state=wrong-state&code=bad")
 	if err != nil {
 		t.Fatal(err)
 	}
-	closeCallbackResponse(t, response)
-	if response.StatusCode == http.StatusOK {
-		t.Fatal("wrong callback state was accepted")
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("wrong callback state status = %d, want %d", response.StatusCode, http.StatusBadRequest)
 	}
+	if got := response.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("wrong callback state content type = %q", got)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(body)) != response.ContentLength {
+		t.Fatalf("rejected callback response: received %d bytes, expected %d", len(body), response.ContentLength)
+	}
+	closeCallbackResponse(t, response)
 
 	idleConnection, err := net.Dial("tcp", callback.listener.Addr().String())
 	if err != nil {
@@ -47,6 +60,12 @@ func TestCallbackRejectsWrongPathAndStateWithoutConsumingValidCallback(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("valid callback status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	if got := response.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("valid callback content type = %q", got)
+	}
 	result, err := callback.Wait(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +76,7 @@ func TestCallbackRejectsWrongPathAndStateWithoutConsumingValidCallback(t *testin
 	if err := callback.Shutdown(); err != nil {
 		t.Fatal(err)
 	}
-	body, err := io.ReadAll(response.Body)
+	body, err = io.ReadAll(response.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
