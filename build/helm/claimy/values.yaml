@@ -17,13 +17,14 @@ image:
 # The referenced Secret must already exist before Helm runs the migration hook.
 # Its passwordKey value is used by both the server and the migration Job.
 database:
+  # May be empty only when extraEnv provides SQLC_DEFAULT_URI_HOST from a Secret or ConfigMap.
   host: ""
   port: 3306
   name: ""
   user: ""
   existingSecret: ""
   passwordKey: password
-  # These are passed through the MySQL DSN. Values are URL-encoded for Goose.
+  # The migration adapter uses SQLC's MySQL driver to serialize effective parameters.
   parameters:
     loc: UTC
     time_zone: "'+00:00'"
@@ -144,6 +145,7 @@ extraEnv: []
 extraVolumes: []
 extraVolumeMounts: []
 
+deploymentAnnotations: {}
 podAnnotations: {}
 podLabels: {}
 nodeSelector: {}

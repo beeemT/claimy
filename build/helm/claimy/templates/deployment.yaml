@@ -4,6 +4,11 @@ metadata:
   name: {{ include "claimy-chart.fullname" . }}
   labels:
     {{- include "claimy-chart.labels" . | nindent 4 }}
+
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
@@ -42,14 +47,7 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
-            - name: CLAIMY_DATABASE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.database.existingSecret | quote }}
-                  key: {{ include "claimy-chart.passwordKey" . }}
-            {{- with .Values.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+            {{- include "claimy-chart.runtimeEnv" . | nindent 12 }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           volumeMounts:

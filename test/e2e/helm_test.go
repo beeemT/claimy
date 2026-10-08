@@ -416,13 +416,45 @@ func captureHelmSmokeDiagnostics(t *testing.T, kubeconfig, contextName, release,
 		},
 	}
 	for _, diagnostic := range diagnostics {
-		result := kubectlSmokeCleanup(t, kubeconfig, contextName, 30*time.Second, nil, diagnostic.args...)
+		var result helmSmokeResult
+		if diagnostic.name == "migration logs" {
+			result = captureMigrationLogs(t, kubeconfig, contextName, migrationJob)
+		} else {
+			result = kubectlSmokeCleanup(t, kubeconfig, contextName, 30*time.Second, nil, diagnostic.args...)
+		}
 		output := helmSmokeDiagnosticWithSecrets(result, password)
 		if output == "" {
 			output = "<no output>"
 		}
 		t.Logf("Helm smoke diagnostic (%s):\n%s", diagnostic.name, output)
 	}
+}
+
+func captureMigrationLogs(t *testing.T, kubeconfig, contextName, migrationJob string) helmSmokeResult {
+	t.Helper()
+	pods := kubectlSmokeCleanup(t, kubeconfig, contextName, 30*time.Second, nil,
+		"get", "pods", "-n", "default", "-l", "job-name="+migrationJob,
+		"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
+	if pods.err != nil {
+		return pods
+	}
+
+	var logs bytes.Buffer
+	var firstErr error
+	for _, pod := range strings.Fields(string(pods.stdout)) {
+		result := kubectlSmokeCleanup(t, kubeconfig, contextName, 30*time.Second, nil,
+			"logs", "pod/"+pod, "-n", "default", "--all-containers=true", "--tail=200", "--prefix=true")
+		logs.WriteString("=== ")
+		logs.WriteString(pod)
+		logs.WriteString(" ===\n")
+		logs.Write(result.stdout)
+		logs.Write(result.stderr)
+		if firstErr == nil && result.err != nil {
+			firstErr = result.err
+		}
+	}
+
+	return helmSmokeResult{stdout: logs.Bytes(), err: firstErr}
 }
 
 func applyMySQL(t *testing.T, kubeconfig, contextName, password string) {
@@ -435,6 +467,14 @@ type: Opaque
 stringData:
   password: %s
   root-password: %s
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: claimy-db-connection
+type: Opaque
+stringData:
+  endpoint: claimy-mysql
 ---
 apiVersion: v1
 kind: Service
@@ -501,6 +541,7 @@ spec:
 	if result.err != nil {
 		t.Fatalf("apply disposable MySQL manifest: %s", helmSmokeDiagnostic(result))
 	}
+	waitForKubectlCondition(t, kubeconfig, contextName, "available", "deployment/claimy-mysql", 3*time.Minute)
 }
 
 func createJWKSSecret(t *testing.T, kubeconfig, contextName, caPath string) {
@@ -875,7 +916,7 @@ image:
   digest: %s
   pullPolicy: IfNotPresent
 database:
-  host: claimy-mysql
+  host: claimy-legacy-host.invalid
   port: 3306
   name: claimy
   user: claimy
@@ -948,6 +989,13 @@ migrations:
   activeDeadlineSeconds: 600
   resources: {}
 extraEnv:
+  - name: SQLC_DEFAULT_URI_HOST
+    valueFrom:
+      secretKeyRef:
+        name: claimy-db-connection
+        key: endpoint
+  - name: SQLC_DEFAULT_PARAMETERS_TIME_ZONE
+    value: "'+00:00'"
   - name: SSL_CERT_FILE
     value: /etc/claimy/jwks/ca.pem
 extraVolumes:
