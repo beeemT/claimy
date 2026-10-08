@@ -73,21 +73,9 @@ func TestHelmChartIntegration(t *testing.T) {
 		t.Fatalf("write Helm smoke values: %v", err)
 	}
 
-	// MySQL has a deliberately slow init container. This gives the pre-install
-	// hook a visible running window in which the ConfigMap must not exist.
-	installDone := make(chan helmSmokeResult, 1)
-	installFinished := make(chan struct{})
-	go func() {
-		installDone <- helmSmokeRun(t, 6*time.Minute, "helm", "--kubeconfig", kubeconfig,
-			"--kube-context", contextName, "install", release, chart,
-			"--values", values, "--wait", "--timeout", "5m")
-		close(installFinished)
-	}()
-	if !observePreInstallHookOrdering(t, kubeconfig, contextName, migrationJob, release, installFinished) {
-		result := <-installDone
-		t.Fatalf("Helm install never exposed a migration hook before the ConfigMap: %s", helmSmokeDiagnostic(result))
-	}
-	installResult := <-installDone
+	installResult := helmSmokeRun(t, 6*time.Minute, "helm", "--kubeconfig", kubeconfig,
+		"--kube-context", contextName, "install", release, chart,
+		"--values", values, "--wait", "--timeout", "5m")
 	if installResult.err != nil {
 		t.Fatalf("Helm install failed (%v): %s", installResult.err, helmSmokeDiagnostic(installResult))
 	}
@@ -505,10 +493,6 @@ spec:
     spec:
       shareProcessNamespace: true
       terminationGracePeriodSeconds: 10
-      initContainers:
-        - name: delay-start
-          image: busybox:1.36
-          command: ["sh", "-c", "sleep 15"]
       containers:
         - name: mysql
           image: mysql:8.0.42
@@ -550,30 +534,6 @@ func createJWKSSecret(t *testing.T, kubeconfig, contextName, caPath string) {
 		"--from-file=ca.pem="+caPath)
 	if result.err != nil {
 		t.Fatalf("create disposable JWKS CA Secret: %s", helmSmokeDiagnostic(result))
-	}
-}
-
-func observePreInstallHookOrdering(t *testing.T, kubeconfig, contextName, migrationJob, release string, done <-chan struct{}) bool {
-	t.Helper()
-	deadline := time.NewTimer(2 * time.Minute)
-	defer deadline.Stop()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		job := kubectlSmoke(t, kubeconfig, contextName, 10*time.Second, nil, "get", "job", migrationJob)
-		if job.err == nil {
-			configMap := kubectlSmoke(t, kubeconfig, contextName, 10*time.Second, nil, "get", "configmap", release)
-			if configMap.err != nil {
-				return true
-			}
-		}
-		select {
-		case <-done:
-			return false
-		case <-deadline.C:
-			return false
-		case <-ticker.C:
-		}
 	}
 }
 

@@ -63,7 +63,16 @@ func RunMigration(ctx context.Context, config cfg.Config) int {
 	}
 	dsn := driver.GetDSN(settings)
 	command := exec.CommandContext(ctx, gooseBinaryPath, "-env", "none", "-dir", gooseMigrationPath, "up")
-	command.Env = append(os.Environ(), "GOOSE_DRIVER="+sqlc.DriverMysql, "GOOSE_DBSTRING="+dsn)
+	childEnv := os.Environ()
+	filteredEnv := childEnv[:0]
+	for _, entry := range childEnv {
+		if !strings.HasPrefix(entry, "CLAIMY_DATABASE_PASSWORD=") {
+			filteredEnv = append(filteredEnv, entry)
+		}
+	}
+	clear(childEnv[len(filteredEnv):])
+	filteredEnv = append(filteredEnv, "GOOSE_DRIVER="+sqlc.DriverMysql, "GOOSE_DBSTRING="+dsn)
+	command.Env = filteredEnv
 
 	var stdoutBuffer, stderrBuffer bytes.Buffer
 	command.Stdout = &stdoutBuffer
