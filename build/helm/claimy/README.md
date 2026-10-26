@@ -182,6 +182,40 @@ when concurrent application deploys or other DDL are quiesced. The application
 image must connect to MySQL 8.0.16 or newer. MariaDB is not supported, and the
 Claimy schema requires InnoDB with the session time zone set to `+00:00`.
 
+## Argo CD sync waves
+
+By default, migrations use Helm pre-install/pre-upgrade hooks. Argo CD maps
+these to `PreSync`, which runs before ordinary resources regardless of their
+sync waves. If the same Application provisions the database and credential
+Secrets, configure both migration resources as `Sync` hooks instead:
+
+```yaml
+migrations:
+  configMapAnnotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+deploymentAnnotations:
+  argocd.argoproj.io/sync-wave: "2"
+```
+
+Place database and credential resources from the enclosing deployment in
+negative waves, with health checks that reflect actual readiness. Argo CD
+then waits for those dependencies, creates configuration in wave 0, completes
+migration in wave 1, and rolls out the API in wave 2. Keep the migration
+ConfigMap until the next sync so it remains available while the Job runs.
+
+`migrations.annotations` and `migrations.configMapAnnotations` extend or
+override the default Helm annotations. Explicit Argo CD hook annotations take
+precedence; use Argo annotations consistently for other hooks in the same
+Application. Use a normal sync: hooks do not run in resource-selective syncs.
+See [Argo CD phases and waves](https://argo-cd.readthedocs.io/en/stable/user-guide/sync-waves/)
+and [Helm hook mapping](https://argo-cd.readthedocs.io/en/stable/user-guide/helm/#helm-hooks).
+
 ## Runtime health and capacity
 
 The named Service and container port are `http` and default to 8088. The

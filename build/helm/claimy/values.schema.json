@@ -219,6 +219,14 @@
       "required": ["enabled", "backoffLimit", "activeDeadlineSeconds", "resources"],
       "properties": {
         "enabled": {"type": "boolean"},
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "configMapAnnotations": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
         "backoffLimit": {"type": "integer", "minimum": 0},
         "activeDeadlineSeconds": {"type": "integer", "minimum": 1},
         "resources": {"type": "object"}

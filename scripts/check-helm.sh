@@ -157,4 +157,48 @@ if helm template claimy-check-invalid "$chart" --values "$values" --set config.c
   echo 'error: invalid literal authentication domain was accepted' >&2
   exit 1
 fi
-printf '%s\n' 'Helm lint, render, and package checks passed'
+# --reuse-values from an older release has no annotation maps. Missing maps
+# must retain the Helm hooks instead of turning migration into ordinary resources.
+for template in migration-configmap migration-job; do
+  helm template claimy-check "$chart" --values "$values" \
+    --set-json 'migrations.annotations=null' --set-json 'migrations.configMapAnnotations=null' \
+    --show-only "templates/$template.yaml" >"$tmp/reused-$template.yaml"
+  grep -Fq 'helm.sh/hook: pre-install,pre-upgrade' "$tmp/reused-$template.yaml"
+done
+
+# A fresh Argo installation must be able to create its database and Secrets
+# before migration, while keeping the API behind a successful migration.
+argo_values="$tmp/argo-values.yaml"
+cat >"$argo_values" <<'YAML'
+migrations:
+  configMapAnnotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+deploymentAnnotations:
+  argocd.argoproj.io/sync-wave: "2"
+YAML
+for template in migration-configmap migration-job deployment; do
+  helm template claimy-check "$chart" --values "$values" --values "$argo_values" \
+    --show-only "templates/$template.yaml" >"$tmp/$template.yaml"
+done
+for template in migration-configmap migration-job; do
+  grep -Fq 'argocd.argoproj.io/hook: Sync' "$tmp/$template.yaml"
+done
+grep -Fq 'argocd.argoproj.io/sync-wave: "0"' "$tmp/migration-configmap.yaml"
+grep -Fxq '    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation' "$tmp/migration-configmap.yaml"
+grep -Fq 'argocd.argoproj.io/sync-wave: "1"' "$tmp/migration-job.yaml"
+grep -Fq 'argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded' "$tmp/migration-job.yaml"
+grep -Fq 'argocd.argoproj.io/sync-wave: "2"' "$tmp/deployment.yaml"
+for annotations in annotations configMapAnnotations; do
+  if helm template claimy-check-invalid "$chart" --values "$values" \
+    --set "migrations.$annotations.invalid=true" >/dev/null 2>&1; then
+    echo "error: non-string migration $annotations were accepted" >&2
+    exit 1
+  fi
+done
+printf '%s\n' 'Helm lint, render, package, and Argo sync-wave checks passed'

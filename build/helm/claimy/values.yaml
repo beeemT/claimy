@@ -105,6 +105,9 @@ service:
 
 migrations:
   enabled: true
+  # Optional overrides for the Job and ConfigMap's default Helm hook metadata.
+  annotations: {}
+  configMapAnnotations: {}
   backoffLimit: 6
   activeDeadlineSeconds: 600
   resources: {}
